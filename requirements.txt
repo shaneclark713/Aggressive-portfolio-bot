@@ -1,0 +1,18 @@
+# Async & Scheduling
+apscheduler==3.10.4
+
+# Telegram Integration
+python-telegram-bot==20.8
+
+# Broker & Data APIs
+robin_stocks==3.1.0
+requests==2.31.0
+aiohttp==3.9.3
+
+# Data Math & Analysis
+pandas==2.2.0
+pandas-ta==0.3.14b0  # Used for RSI, Bollinger Bands, EMA calculations
+numpy==1.26.4
+
+# Backtesting
+backtrader==1.9.78.123

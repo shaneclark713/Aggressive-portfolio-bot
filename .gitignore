@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Logs / reports / snapshots
+storage/logs/*
+storage/reports/*
+storage/snapshots/*
+!storage/logs/.gitkeep
+!storage/reports/.gitkeep
+!storage/snapshots/.gitkeep
+
+# Database
+*.sqlite3
+*.db
+*.db-shm
+*.db-wal
+
+# Coverage / test artifacts
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# IDE / OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

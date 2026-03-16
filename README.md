@@ -1,3 +1,12 @@
-# Aggressive Portfolio Bot
+# Docs
 
-Async trading bot for IBKR (stocks/options) and Tradovate (futures), using Polygon/Finnhub data, Telegram control plane, SQLite state, and Google Sheets ledger exports.
+## Render env vars
+Use the keys defined in `.env.example`.
+
+## Execution modes
+- alerts_only
+- approval_only
+- automated
+
+## Telegram admin lock
+Only `TELEGRAM_ADMIN_CHAT_ID` is allowed to approve/reject or control the bot.

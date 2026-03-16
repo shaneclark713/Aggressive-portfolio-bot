@@ -1,0 +1,1 @@
+TRADE_COLUMNS=['trade_id','broker_order_id','symbol','side','strategy','horizon','entry_time','exit_time','entry_price','exit_price','stop_loss','take_profit','pnl','rr_ratio','close_reason','entry_snapshot_path','close_snapshot_path','notes']

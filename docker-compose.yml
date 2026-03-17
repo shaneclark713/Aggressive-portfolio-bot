@@ -1,7 +1,0 @@
-services:
-  bot:
-    build: .
-    environment:
-      APP_ENV: production
-    volumes:
-      - .:/app

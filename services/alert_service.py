@@ -48,12 +48,17 @@ class AlertService:
         self.execution_log_repo.log('ALERT_CREATED', trade_id=trade_id, details=payload)
         return trade_id
 
-    def expire_alerts(self):
-        expired = self.alert_repo.get_expired_alerts()
-        ids = []
-        for row in expired:
-            self.alert_repo.update_status(row['trade_id'], 'EXPIRED')
-            self.trade_repo.upsert_trade({'trade_id': row['trade_id'], 'status': 'EXPIRED'})
-            self.execution_log_repo.log('ALERT_EXPIRED', trade_id=row['trade_id'])
-            ids.append(row['trade_id'])
-        return ids
+    def expire_alerts(self) -> None:
+    expired = self.alert_repo.get_expired_alerts(
+        timeout_seconds=getattr(self.settings, "bot_approval_timeout_seconds", 180)
+    )
+    for alert in expired:
+        self.alert_repo.mark_alert_expired(alert["alert_id"])
+        self.execution_log_repo.log_event(
+            "ALERT_EXPIRED",
+            {
+                "alert_id": alert["alert_id"],
+                "symbol": alert.get("symbol"),
+                "strategy": alert.get("strategy"),
+            },
+        )

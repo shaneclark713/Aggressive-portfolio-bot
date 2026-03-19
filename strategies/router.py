@@ -7,8 +7,9 @@ from .breakout_box import BreakoutBoxStrategy
 from .trend_following import TrendFollowingStrategy
 from .divergence import DivergenceStrategy
 from .mean_reversion import MeanReversionStrategy
-from aggressive_portfolio_bot.risk.kill_switch import AntiFomoKillSwitch
-from aggressive_portfolio_bot.risk.risk_engine import RiskEngine
+from risk.kill_switch import AntiFomoKillSwitch
+from risk.risk_engine import RiskEngine
+
 
 logger = logging.getLogger("aggressive_portfolio_bot.strategies.router")
 

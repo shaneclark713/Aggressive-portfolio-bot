@@ -1,18 +1,30 @@
 import sqlite3
 from pathlib import Path
+from typing import Optional
 
-DEFAULT_DB_PATH = "database/trading_bot.sqlite3"
+
+DEFAULT_DB_FILENAME = "trading_bot.sqlite3"
 
 
-def connect_db(db_path: str = DEFAULT_DB_PATH) -> sqlite3.Connection:
-    db_file = Path(db_path)
+def connect_db(db_path: Optional[str] = None) -> sqlite3.Connection:
+    if not db_path:
+        db_file = Path("storage") / DEFAULT_DB_FILENAME
+    else:
+        raw_path = Path(db_path)
+
+        if raw_path.suffix == ".sqlite3":
+            db_file = raw_path
+        else:
+            db_file = raw_path / DEFAULT_DB_FILENAME
+
     db_file.parent.mkdir(parents=True, exist_ok=True)
+
     conn = sqlite3.connect(db_file.as_posix(), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
 
-def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
+def init_db(db_path: Optional[str] = None) -> None:
     conn = connect_db(db_path)
     cursor = conn.cursor()
 
@@ -55,6 +67,33 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             event_time TEXT NOT NULL,
             payload TEXT,
             FOREIGN KEY(trade_id) REFERENCES active_trades(trade_id)
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS alerts (
+            alert_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol TEXT NOT NULL,
+            strategy TEXT,
+            side TEXT,
+            payload TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'PENDING',
+            created_at TEXT NOT NULL,
+            responded_at TEXT
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS strategy_states (
+            strategy_name TEXT PRIMARY KEY,
+            is_enabled INTEGER NOT NULL DEFAULT 1
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS filter_overrides (
+            override_key TEXT PRIMARY KEY,
+            override_value TEXT NOT NULL
         )
     """)
 

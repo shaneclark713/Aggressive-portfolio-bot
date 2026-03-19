@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 
@@ -189,6 +189,32 @@ class AlertRepository:
         )
         rows = cursor.fetchall()
         return [dict(row) for row in rows]
+
+    def get_expired_alerts(self, timeout_seconds: int = 180) -> List[Dict[str, Any]]:
+        cutoff = (datetime.utcnow() - timedelta(seconds=timeout_seconds)).isoformat()
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT * FROM alerts
+            WHERE status = 'PENDING' AND created_at <= ?
+            ORDER BY alert_id ASC
+            """,
+            (cutoff,),
+        )
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+
+    def mark_alert_expired(self, alert_id: int) -> None:
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            UPDATE alerts
+            SET status = 'EXPIRED', responded_at = ?
+            WHERE alert_id = ?
+            """,
+            (datetime.utcnow().isoformat(), alert_id),
+        )
+        self.conn.commit()
 
 
 class ExecutionLogRepository:

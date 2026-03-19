@@ -51,7 +51,7 @@ async def main() -> None:
     await news.connect()
     await econ.connect()
 
-    router = StrategyRouter(config_service.get_strategy_states())
+    router = StrategyRouter()
     universe_filter = UniverseFilter(market)
     scanner = ScannerService(market, universe_filter, router)
 

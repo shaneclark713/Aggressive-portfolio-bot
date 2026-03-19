@@ -1,221 +1,158 @@
+from __future__ import annotations
+
 import logging
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
 
 import pandas as pd
 
 from .breakout_box import BreakoutBoxStrategy
-from .trend_following import TrendFollowingStrategy
 from .divergence import DivergenceStrategy
+from .indicators import atr, percent_change
+from .market_regime import MarketRegimeClassifier
 from .mean_reversion import MeanReversionStrategy
+from .trend_following import TrendFollowingStrategy
 from risk.kill_switch import AntiFomoKillSwitch
 from risk.risk_engine import RiskEngine
-
 
 logger = logging.getLogger("aggressive_portfolio_bot.strategies.router")
 
 
 class StrategyRouter:
-    def __init__(self):
-        self.strategies = {
-            "Divergence": DivergenceStrategy(),
-            "Breakout Box": BreakoutBoxStrategy(),
-            "Trend Following": TrendFollowingStrategy(),
-            "Mean Reversion": MeanReversionStrategy(),
-        }
-
+    def __init__(self, strategy_states: Optional[Dict[str, bool]] = None):
+        self.strategy_states = strategy_states or {}
+        self.strategies = [
+            ("Divergence", DivergenceStrategy()),
+            ("Breakout Box", BreakoutBoxStrategy()),
+            ("Trend Following", TrendFollowingStrategy()),
+            ("Mean Reversion", MeanReversionStrategy()),
+        ]
         self.kill_switch = AntiFomoKillSwitch()
         self.risk_engine = RiskEngine(min_rr_ratio=2.0, atr_multiplier_sl=1.0)
+        self.market_regime = MarketRegimeClassifier()
 
-    def _calculate_atr(self, df: pd.DataFrame, period: int = 14) -> pd.Series:
-        prev_close = df["close"].shift(1)
-        tr = pd.concat(
-            [
-                df["high"] - df["low"],
-                (df["high"] - prev_close).abs(),
-                (df["low"] - prev_close).abs(),
-            ],
-            axis=1,
-        ).max(axis=1)
-        return tr.rolling(window=period, min_periods=period).mean()
+    def _is_enabled(self, strategy_name: str) -> bool:
+        return bool(self.strategy_states.get(strategy_name, True))
 
-    def _classify_trade_horizon(
-        self,
-        strategy_name: str,
-        entry_price: float,
-        take_profit: float,
-        atr: float,
-        rr_ratio: float,
-    ) -> str:
-        target_distance = abs(take_profit - entry_price)
-        atr_multiple_to_target = target_distance / atr if atr > 0 else 0.0
-
+    def _classify_trade_horizon(self, strategy_name: str, regime: str) -> str:
         if strategy_name == "Mean Reversion":
             return "DAY_TRADE"
-
         if strategy_name == "Trend Following":
             return "SWING_TRADE"
+        if strategy_name == "Divergence" and regime in {"RANGE", "TRANSITION"}:
+            return "DAY_TRADE"
+        if strategy_name == "Breakout Box" and regime.startswith("TREND"):
+            return "DAY_TRADE"
+        return "SWING_TRADE"
 
-        if strategy_name == "Breakout Box":
-            if atr_multiple_to_target <= 1.5 and rr_ratio <= 2.5:
-                return "DAY_TRADE"
-            return "SWING_TRADE"
-
-        if strategy_name == "Divergence":
-            if atr_multiple_to_target <= 1.25:
-                return "DAY_TRADE"
-            return "SWING_TRADE"
-
-        return "DAY_TRADE"
+    def _entry_zone(self, entry_price: float, side: str, atr_value: float) -> list[float]:
+        buffer_amt = atr_value * 0.10
+        if side == "LONG":
+            return [round(entry_price - buffer_amt, 2), round(entry_price + buffer_amt, 2)]
+        return [round(entry_price + buffer_amt, 2), round(entry_price - buffer_amt, 2)]
 
     def evaluate_ticker(self, symbol: str, df: pd.DataFrame) -> Optional[Dict[str, Any]]:
-        required_cols = {"open", "high", "low", "close", "volume"}
-        if df.empty:
-            logger.debug("[%s] DataFrame is empty.", symbol)
+        required = {"open", "high", "low", "close", "volume"}
+        if df.empty or not required.issubset(df.columns):
             return None
 
-        if not required_cols.issubset(df.columns):
-            missing = sorted(required_cols - set(df.columns))
-            logger.warning("[%s] Missing required columns: %s", symbol, missing)
-            return None
-
-        work_df = df[list(required_cols)].dropna().copy()
+        work_df = df[list(required)].dropna().copy()
         if len(work_df) < 50:
-            logger.debug("[%s] Not enough clean data to evaluate.", symbol)
             return None
 
-        detected_signal = "WAIT"
-        winning_strategy_name: Optional[str] = None
-        setup_data: Dict[str, Any] = {}
+        regime = self.market_regime.classify(work_df)
+        selected_setup: Optional[Dict[str, Any]] = None
+        selected_strategy_name: Optional[str] = None
 
-        for name, strategy_module in self.strategies.items():
-            try:
-                result = strategy_module.analyze(work_df, symbol)
-            except Exception as e:
-                logger.exception("[%s] Strategy '%s' failed: %s", symbol, name, e)
+        for strategy_name, strategy in self.strategies:
+            if not self._is_enabled(strategy_name):
                 continue
 
+            result = strategy.analyze(work_df, symbol)
             signal = result.get("signal", "WAIT")
             if signal.startswith("LONG_") or signal.startswith("SHORT_"):
-                detected_signal = signal
-                winning_strategy_name = name
-                setup_data = result
+                selected_setup = result
+                selected_strategy_name = strategy_name
                 break
 
-        if detected_signal == "WAIT" or winning_strategy_name is None:
-            logger.debug("[%s] No valid strategy trigger found.", symbol)
+        if not selected_setup or not selected_strategy_name:
             return None
 
-        side = "LONG" if detected_signal.startswith("LONG_") else "SHORT"
-        logger.info("[%s] Triggered %s via %s. Running protections...", symbol, side, winning_strategy_name)
+        side = "LONG" if selected_setup["signal"].startswith("LONG_") else "SHORT"
 
-        try:
-            is_safe, fomo_reason = self.kill_switch.check_trade_validity(work_df, symbol, side)
-        except Exception as e:
-            logger.exception("[%s] Kill switch failed: %s", symbol, e)
-            return None
-
+        is_safe, kill_switch_reason = self.kill_switch.check_trade_validity(work_df, symbol, side)
         if not is_safe:
-            logger.warning("[%s] %s blocked by Kill Switch: %s", symbol, winning_strategy_name, fomo_reason)
+            logger.info("[%s] Blocked by kill switch: %s", symbol, kill_switch_reason)
             return None
 
-        risk_df = work_df.copy()
-        atr_series = self._calculate_atr(risk_df, period=14)
-
-        if atr_series.dropna().empty:
-            logger.warning("[%s] Invalid ATR value for risk calculation.", symbol)
+        atr_series = atr(work_df[["high", "low", "close"]], 14).dropna()
+        if atr_series.empty:
             return None
 
-        latest = risk_df.iloc[-1]
-        entry_price = float(latest["close"])
-        current_atr = float(atr_series.dropna().iloc[-1])
+        atr_value = float(atr_series.iloc[-1])
+        entry_price = float(work_df["close"].iloc[-1])
+        recent_window = work_df.iloc[-21:-1]
+        recent_swing_high = float(recent_window["high"].max())
+        recent_swing_low = float(recent_window["low"].min())
 
-        prior_structure = risk_df.iloc[-21:-1]
-        if prior_structure.empty:
-            logger.warning("[%s] Not enough prior candles for structural levels.", symbol)
-            return None
-
-        recent_swing_high = float(prior_structure["high"].max())
-        recent_swing_low = float(prior_structure["low"].min())
-
-        try:
-            risk_data = self.risk_engine.calculate_trade_parameters(
-                symbol=symbol,
-                entry_price=entry_price,
-                side=side,
-                atr=current_atr,
-                recent_swing_high=recent_swing_high,
-                recent_swing_low=recent_swing_low,
-            )
-        except Exception as e:
-            logger.exception("[%s] Risk engine failed: %s", symbol, e)
-            return None
-
+        risk_data = self.risk_engine.calculate_trade_parameters(
+            symbol=symbol,
+            entry_price=entry_price,
+            side=side,
+            atr=atr_value,
+            recent_swing_high=recent_swing_high,
+            recent_swing_low=recent_swing_low,
+        )
         if not risk_data.get("is_valid", False):
-            logger.info(
-                "[%s] %s blocked by Risk Engine: %s",
-                symbol,
-                winning_strategy_name,
-                risk_data.get("reason", "Unknown reason"),
-            )
             return None
 
-        final_payload: Dict[str, Any] = {
+        trade_horizon = self._classify_trade_horizon(selected_strategy_name, regime)
+        trigger_reasons = selected_setup.get("trigger_reasons", [])
+        confidence = int(selected_setup.get("confidence", 0))
+        metrics = dict(selected_setup.get("metrics", {}))
+
+        move_5 = percent_change(work_df["close"], periods=min(5, len(work_df)-1)).iloc[-1]
+        volume_ratio = float(work_df["volume"].iloc[-1] / work_df["volume"].tail(20).mean())
+
+        targets = [
+            round(float(risk_data["take_profit"]), 2),
+            round(float(entry_price + (float(risk_data["reward"]) * 1.5)) if side == "LONG" else float(entry_price - (float(risk_data["reward"]) * 1.5)), 2),
+        ]
+
+        payload = {
             "symbol": symbol,
-            "strategy": winning_strategy_name,
-            "signal": detected_signal,
+            "strategy": selected_strategy_name,
+            "signal": selected_setup["signal"],
             "side": side,
-            "entry_price": risk_data["entry_price"],
-            "stop_loss": risk_data["stop_loss"],
-            "take_profit": risk_data["take_profit"],
-            "risk_per_share": risk_data["risk"],
-            "reward_per_share": risk_data["reward"],
-            "rr_ratio": risk_data["actual_rr"],
+            "regime": regime,
+            "trade_horizon": trade_horizon,
+            "holding_style": "Intraday" if trade_horizon == "DAY_TRADE" else "Multi-Day",
+            "entry_price": round(float(risk_data["entry_price"]), 2),
+            "entry_zone": self._entry_zone(entry_price, side, atr_value),
+            "stop_loss": round(float(risk_data["stop_loss"]), 2),
+            "take_profit": round(float(risk_data["take_profit"]), 2),
+            "targets": targets,
+            "risk_per_share": round(float(risk_data["risk"]), 2),
+            "reward_per_share": round(float(risk_data["reward"]), 2),
+            "rr_ratio": round(float(risk_data["actual_rr"]), 2),
+            "confidence": confidence,
+            "trigger_reasons": trigger_reasons,
+            "filter_pass_summary": {
+                "kill_switch": True,
+                "risk_engine": True,
+                "strategy_enabled": True,
+            },
+            "metrics": {
+                **metrics,
+                "atr_14": round(atr_value, 2),
+                "atr_pct": round((atr_value / entry_price) * 100, 2),
+                "volume_ratio": round(volume_ratio, 2),
+                "move_last_window_pct": round(float(move_5), 2),
+            },
+            "notes": selected_setup.get("metadata", {}),
         }
 
-        if "box_high" in setup_data:
-            final_payload["box_high"] = setup_data["box_high"]
-        if "box_low" in setup_data:
-            final_payload["box_low"] = setup_data["box_low"]
-        if "mean_target" in setup_data:
-            final_payload["mean_target"] = setup_data["mean_target"]
+        if selected_strategy_name == "Mean Reversion" and "mean_target" in metrics:
+            payload["take_profit"] = round(float(metrics["mean_target"]), 2)
+            payload["targets"][0] = payload["take_profit"]
 
-        if winning_strategy_name == "Mean Reversion" and "mean_target" in setup_data:
-            try:
-                mean_target = float(setup_data["mean_target"])
-                if side == "LONG" and mean_target > final_payload["entry_price"]:
-                    final_payload["take_profit"] = round(mean_target, 2)
-                    final_payload["reward_per_share"] = round(
-                        mean_target - final_payload["entry_price"], 2
-                    )
-                elif side == "SHORT" and mean_target < final_payload["entry_price"]:
-                    final_payload["take_profit"] = round(mean_target, 2)
-                    final_payload["reward_per_share"] = round(
-                        final_payload["entry_price"] - mean_target, 2
-                    )
-
-                risk_per_share = float(final_payload["risk_per_share"])
-                reward_per_share = float(final_payload["reward_per_share"])
-                if risk_per_share > 0:
-                    final_payload["rr_ratio"] = round(reward_per_share / risk_per_share, 2)
-
-            except (TypeError, ValueError):
-                logger.warning("[%s] Invalid mean_target value in setup data.", symbol)
-
-        trade_horizon = self._classify_trade_horizon(
-            strategy_name=winning_strategy_name,
-            entry_price=float(final_payload["entry_price"]),
-            take_profit=float(final_payload["take_profit"]),
-            atr=current_atr,
-            rr_ratio=float(final_payload["rr_ratio"]),
-        )
-
-        final_payload["trade_horizon"] = trade_horizon
-        final_payload["holding_style"] = "Intraday" if trade_horizon == "DAY_TRADE" else "Multi-Day"
-
-        logger.info(
-            "[%s] SUCCESS: Valid %s payload generated as %s.",
-            symbol,
-            winning_strategy_name,
-            trade_horizon,
-        )
-        return final_payload
+        return payload

@@ -5,14 +5,7 @@ from typing import Any, Dict
 
 
 class AlertService:
-    def __init__(
-        self,
-        alert_repo,
-        trade_repo,
-        execution_log_repo,
-        config_service,
-        settings,
-    ):
+    def __init__(self, alert_repo, trade_repo, execution_log_repo, config_service, settings):
         self.alert_repo = alert_repo
         self.trade_repo = trade_repo
         self.execution_log_repo = execution_log_repo
@@ -28,40 +21,33 @@ class AlertService:
                 "symbol": payload.get("symbol"),
                 "strategy": payload.get("strategy"),
                 "side": payload.get("side"),
+                "mode": self.config_service.get_execution_mode(),
                 "created_at": datetime.utcnow().isoformat(),
             },
         )
         return alert_id
 
+    def create_trade_candidate(self, payload: Dict[str, Any], broker: str, instrument_type: str) -> int:
+        enriched_payload = {
+            **payload,
+            "broker": broker,
+            "instrument_type": instrument_type,
+            "mode": self.config_service.get_execution_mode(),
+            "created_at": datetime.utcnow().isoformat(),
+        }
+        return self.create_alert(enriched_payload)
+
     def approve_alert(self, alert_id: int) -> None:
         self.alert_repo.update_alert_status(alert_id, "APPROVED")
-        self.execution_log_repo.log_event(
-            "ALERT_APPROVED",
-            {
-                "alert_id": alert_id,
-                "approved_at": datetime.utcnow().isoformat(),
-            },
-        )
+        self.execution_log_repo.log_event("ALERT_APPROVED", {"alert_id": alert_id, "approved_at": datetime.utcnow().isoformat()})
 
     def reject_alert(self, alert_id: int) -> None:
         self.alert_repo.update_alert_status(alert_id, "REJECTED")
-        self.execution_log_repo.log_event(
-            "ALERT_REJECTED",
-            {
-                "alert_id": alert_id,
-                "rejected_at": datetime.utcnow().isoformat(),
-            },
-        )
+        self.execution_log_repo.log_event("ALERT_REJECTED", {"alert_id": alert_id, "rejected_at": datetime.utcnow().isoformat()})
 
     def paper_trade_alert(self, alert_id: int) -> None:
         self.alert_repo.update_alert_status(alert_id, "PAPER")
-        self.execution_log_repo.log_event(
-            "ALERT_PAPER_TRADED",
-            {
-                "alert_id": alert_id,
-                "paper_traded_at": datetime.utcnow().isoformat(),
-            },
-        )
+        self.execution_log_repo.log_event("ALERT_PAPER_TRADED", {"alert_id": alert_id, "paper_traded_at": datetime.utcnow().isoformat()})
 
     def expire_alerts(self) -> None:
         timeout_seconds = getattr(self.settings, "bot_approval_timeout_seconds", 180)

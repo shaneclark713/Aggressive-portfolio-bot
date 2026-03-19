@@ -1,14 +1,11 @@
+from __future__ import annotations
+
 import logging
-from typing import List, Dict, Any
+from typing import Any, Dict, List
 
 import pandas as pd
 
-from config.universe import (
-    CORE_EQUITIES,
-    CORE_FUTURES,
-    DAY_TRADE_SETTINGS,
-    SWING_TRADE_SETTINGS,
-)
+from config.universe import CORE_EQUITIES, CORE_FUTURES, DAY_TRADE_SETTINGS, SWING_TRADE_SETTINGS
 
 logger = logging.getLogger("aggressive_portfolio_bot.data.universe_filter")
 
@@ -17,11 +14,13 @@ class UniverseFilter:
     def __init__(self, market_client):
         self.market_client = market_client
 
-    async def build_daily_watchlist(self) -> Dict[str, List[str]]:
+    async def build_daily_watchlist(self) -> Dict[str, Any]:
         logger.info("Applying universe filters to build today's active watchlists...")
 
         day_trade_equities: List[str] = []
         swing_trade_equities: List[str] = []
+        day_trade_details: Dict[str, Dict[str, Any]] = {}
+        swing_trade_details: Dict[str, Dict[str, Any]] = {}
 
         for symbol in CORE_EQUITIES:
             try:
@@ -32,12 +31,11 @@ class UniverseFilter:
                     start_date="2025-01-01",
                     end_date="2026-12-31",
                 )
-            except Exception as e:
-                logger.exception("[%s] Failed to fetch historical data: %s", symbol, e)
+            except Exception as exc:
+                logger.exception("[%s] Failed to fetch historical data: %s", symbol, exc)
                 continue
 
-            if df.empty or len(df) < 20:
-                logger.debug("[%s] Not enough daily data for universe filtering.", symbol)
+            if df.empty or len(df) < 30:
                 continue
 
             metrics = self._compute_metrics(df, symbol)
@@ -46,26 +44,23 @@ class UniverseFilter:
 
             if self._passes_settings(metrics, DAY_TRADE_SETTINGS):
                 day_trade_equities.append(symbol)
+                day_trade_details[symbol] = metrics
 
             if self._passes_settings(metrics, SWING_TRADE_SETTINGS):
                 swing_trade_equities.append(symbol)
-
-        logger.info(
-            "Universe filter complete. %s day-trade equities, %s swing-trade equities passed.",
-            len(day_trade_equities),
-            len(swing_trade_equities),
-        )
+                swing_trade_details[symbol] = metrics
 
         return {
             "day_trade_equities": sorted(set(day_trade_equities)),
             "swing_trade_equities": sorted(set(swing_trade_equities)),
             "futures": CORE_FUTURES,
+            "day_trade_details": day_trade_details,
+            "swing_trade_details": swing_trade_details,
         }
 
     def _compute_metrics(self, df: pd.DataFrame, symbol: str) -> Dict[str, Any]:
         required_cols = {"open", "high", "low", "close", "volume"}
         if not required_cols.issubset(df.columns):
-            logger.debug("[%s] Missing required columns for universe metrics.", symbol)
             return {}
 
         work_df = df[list(required_cols)].dropna().copy()
@@ -81,23 +76,21 @@ class UniverseFilter:
 
         current_price = float(latest["close"])
         avg_daily_volume = float(work_df["volume"].tail(20).mean())
+        avg_dollar_volume = float((work_df["close"] * work_df["volume"]).tail(20).mean())
         atr_14 = float(atr_series.iloc[-1])
 
-        if pd.isna(atr_14) or current_price <= 0:
-            logger.debug("[%s] Invalid ATR or current price.", symbol)
-            return {}
-
-        atr_pct = atr_14 / current_price
-
         prev_close = float(previous["close"])
-        gap_pct = abs(float(latest["open"]) - prev_close) / prev_close if prev_close > 0 else 0.0
+        open_gap_pct = abs(float(latest["open"]) - prev_close) / prev_close if prev_close > 0 else 0.0
+        day_range_pct = abs(float(latest["high"]) - float(latest["low"])) / current_price if current_price > 0 else 0.0
 
         return {
             "symbol": symbol,
-            "current_price": current_price,
-            "avg_daily_volume": avg_daily_volume,
-            "atr_pct": atr_pct,
-            "gap_pct": gap_pct,
+            "current_price": round(current_price, 2),
+            "avg_daily_volume": round(avg_daily_volume, 0),
+            "avg_dollar_volume": round(avg_dollar_volume, 0),
+            "atr_pct": round(atr_14 / current_price, 4) if current_price > 0 else 0.0,
+            "open_gap_pct": round(open_gap_pct, 4),
+            "day_range_pct": round(day_range_pct, 4),
         }
 
     def _calculate_atr(self, df: pd.DataFrame, period: int = 14) -> pd.Series:
@@ -110,21 +103,13 @@ class UniverseFilter:
             ],
             axis=1,
         ).max(axis=1)
-
-        atr = tr.rolling(window=period, min_periods=period).mean().dropna()
-        return atr
+        return tr.rolling(window=period, min_periods=period).mean().dropna()
 
     def _passes_settings(self, metrics: Dict[str, Any], settings: Dict[str, Any]) -> bool:
-        if metrics["current_price"] < settings["min_price"]:
-            return False
-
-        if metrics["avg_daily_volume"] < settings["min_avg_daily_volume"]:
-            return False
-
-        if metrics["atr_pct"] < settings["min_atr_pct"]:
-            return False
-
-        if metrics["gap_pct"] > settings["max_gap_pct"]:
-            return False
-
-        return True
+        checks = [
+            metrics["current_price"] >= settings["min_price"],
+            metrics["avg_daily_volume"] >= settings["min_avg_daily_volume"],
+            metrics["atr_pct"] >= settings["min_atr_pct"],
+            metrics["open_gap_pct"] <= settings["max_gap_pct"],
+        ]
+        return all(checks)

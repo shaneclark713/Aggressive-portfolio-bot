@@ -20,42 +20,41 @@ class UniverseFilter:
 
     async def build_daily_watchlist(self) -> Dict[str, List[str]]:
         logger.info("Applying universe filters to build today's active watchlists...")
-
         day_trade_equities: List[str] = []
         swing_trade_equities: List[str] = []
         fetched = 0
         passed_day = 0
         passed_swing = 0
         errors = 0
+        rejected: Dict[str, str] = {}
 
         for symbol in CORE_EQUITIES:
             try:
-                df = await self.market_client.get_historical_data(
-                    symbol=symbol,
-                    multiplier=1,
-                    timespan="day",
-                )
+                df = await self.market_client.get_historical_data(symbol=symbol, multiplier=1, timespan="day")
             except Exception as exc:
                 errors += 1
+                rejected[symbol] = f"fetch_error: {exc}"
                 logger.exception("[%s] Failed to fetch historical data: %s", symbol, exc)
                 continue
 
             if df.empty or len(df) < 20:
-                logger.debug("[%s] Not enough daily data for universe filtering.", symbol)
+                rejected[symbol] = "insufficient_daily_data"
                 continue
 
             fetched += 1
             metrics = self._compute_metrics(df, symbol)
             if not metrics:
+                rejected[symbol] = "metric_calc_failed"
                 continue
 
             if self._passes_settings(metrics, DAY_TRADE_SETTINGS):
                 day_trade_equities.append(symbol)
                 passed_day += 1
-
             if self._passes_settings(metrics, SWING_TRADE_SETTINGS):
                 swing_trade_equities.append(symbol)
                 passed_swing += 1
+            if symbol not in day_trade_equities and symbol not in swing_trade_equities:
+                rejected[symbol] = "failed_thresholds"
 
         self._last_watchlist_stats = {
             "symbols_considered": len(CORE_EQUITIES),
@@ -63,16 +62,9 @@ class UniverseFilter:
             "day_trade_count": passed_day,
             "swing_trade_count": passed_swing,
             "errors": errors,
+            "rejected_examples": dict(list(rejected.items())[:10]),
         }
-
-        logger.info(
-            "Universe filter complete. day=%s swing=%s fetched=%s errors=%s",
-            passed_day,
-            passed_swing,
-            fetched,
-            errors,
-        )
-
+        logger.info("Universe filter complete. day=%s swing=%s fetched=%s errors=%s", passed_day, passed_swing, fetched, errors)
         return {
             "day_trade_equities": sorted(set(day_trade_equities)),
             "swing_trade_equities": sorted(set(swing_trade_equities)),
@@ -84,55 +76,41 @@ class UniverseFilter:
         if not required_cols.issubset(df.columns):
             logger.debug("[%s] Missing required columns for universe metrics.", symbol)
             return {}
-
         work_df = df[["open", "high", "low", "close", "volume"]].dropna().copy()
         if len(work_df) < 20:
             return {}
-
         atr_series = self._calculate_atr(work_df, period=14)
         if atr_series.empty:
             return {}
-
         latest = work_df.iloc[-1]
-        previous = work_df.iloc[-2]
-
-        current_price = float(latest["close"])
-        avg_daily_volume = float(work_df["volume"].tail(20).mean())
+        avg_volume = float(work_df["volume"].tail(20).mean())
         avg_dollar_volume = float((work_df["close"] * work_df["volume"]).tail(20).mean())
-        atr_14 = float(atr_series.iloc[-1])
-
-        if pd.isna(atr_14) or current_price <= 0:
-            logger.debug("[%s] Invalid ATR or current price.", symbol)
-            return {}
-
-        prev_close = float(previous["close"])
-        open_gap_pct = abs(float(latest["open"]) - prev_close) / prev_close if prev_close > 0 else 0.0
-        day_range_pct = abs(float(latest["high"]) - float(latest["low"])) / current_price if current_price > 0 else 0.0
-
+        atr_pct = float(atr_series.iloc[-1] / latest["close"]) if latest["close"] else 0.0
+        prior_close = float(work_df["close"].iloc[-2]) if len(work_df) >= 2 else float(latest["close"])
+        gap_pct = abs(float(latest["open"] - prior_close) / prior_close) if prior_close else 0.0
+        relative_volume = float(latest["volume"] / avg_volume) if avg_volume else 0.0
         return {
             "symbol": symbol,
-            "current_price": round(current_price, 2),
-            "avg_daily_volume": round(avg_daily_volume, 0),
-            "avg_dollar_volume": round(avg_dollar_volume, 0),
-            "atr_pct": round(atr_14 / current_price, 4) if current_price > 0 else 0.0,
-            "open_gap_pct": round(open_gap_pct, 4),
-            "day_range_pct": round(day_range_pct, 4),
+            "price": float(latest["close"]),
+            "avg_daily_volume": avg_volume,
+            "avg_dollar_volume": avg_dollar_volume,
+            "relative_volume": relative_volume,
+            "atr_pct": atr_pct,
+            "gap_pct": gap_pct,
         }
 
-    def _calculate_atr(self, df: pd.DataFrame, period: int = 14) -> pd.Series:
-        prev_close = df["close"].shift(1)
-        tr = pd.concat([
-            df["high"] - df["low"],
-            (df["high"] - prev_close).abs(),
-            (df["low"] - prev_close).abs(),
-        ], axis=1).max(axis=1)
-        return tr.rolling(window=period, min_periods=period).mean().dropna()
-
     def _passes_settings(self, metrics: Dict[str, Any], settings: Dict[str, Any]) -> bool:
-        checks = [
-            metrics["current_price"] >= settings["min_price"],
-            metrics["avg_daily_volume"] >= settings["min_avg_daily_volume"],
-            metrics["atr_pct"] >= settings["min_atr_pct"],
-            metrics["open_gap_pct"] <= settings["max_gap_pct"],
-        ]
-        return all(checks)
+        return (
+            metrics["price"] >= settings["min_price"]
+            and metrics["avg_daily_volume"] >= settings["min_avg_daily_volume"]
+            and metrics["relative_volume"] >= settings["min_relative_volume"]
+            and metrics["atr_pct"] >= settings["min_atr_pct"]
+            and metrics["gap_pct"] <= settings["max_gap_pct"]
+        )
+
+    def _calculate_atr(self, df: pd.DataFrame, period: int = 14) -> pd.Series:
+        high_low = df["high"] - df["low"]
+        high_close = (df["high"] - df["close"].shift(1)).abs()
+        low_close = (df["low"] - df["close"].shift(1)).abs()
+        true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+        return true_range.rolling(period).mean().dropna()

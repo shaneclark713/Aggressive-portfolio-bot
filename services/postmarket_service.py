@@ -15,41 +15,20 @@ class PostmarketService:
         headlines = await self.news_client.fetch_market_news()
         sentiment = analyze_sentiment(headlines)
         open_trades = self.trade_repo.get_open_trades()
-        long_count = sum(1 for trade in open_trades if str(trade.get("side", "")).upper() == "LONG")
-        short_count = sum(1 for trade in open_trades if str(trade.get("side", "")).upper() == "SHORT")
+        closed_today = self.trade_repo.get_closed_trades_today() if hasattr(self.trade_repo, 'get_closed_trades_today') else []
 
         sections = {
             "After-Hours Overview": [
                 f"After-hours sentiment: {sentiment['sentiment']} ({sentiment['score']})",
                 f"Headlines loaded: {len(headlines)}",
             ],
-            "Bot Positions": [
+            "Positions": [
                 f"Open bot-managed trades: {len(open_trades)}",
-                f"Long exposure count: {long_count}",
-                f"Short exposure count: {short_count}",
-            ],
-            "Tomorrow Prep": [
-                "Review failed scans and alert quality.",
-                "Confirm execution mode before the next session.",
-                "Use /scan to manually verify the scanner if needed.",
+                f"Closed trades today: {len(closed_today)}",
             ],
         }
 
-        await self.telegram_app.bot.send_message(
-            chat_id=self.chat_id,
-            text=format_daily_report("🌙 9:00 PM End of Day Wrap-Up", sections),
-            parse_mode="HTML",
-        )
+        await self.telegram_app.bot.send_message(chat_id=self.chat_id, text=format_daily_report("🌙 9:00 PM Post-Market Wrap-Up", sections), parse_mode="HTML")
 
     async def run_weekly_wrapup(self):
-        sections = {
-            "Weekly Summary": [
-                "Weekly summary complete.",
-                "Monday watchlist prep initiated.",
-            ]
-        }
-        await self.telegram_app.bot.send_message(
-            chat_id=self.chat_id,
-            text=format_daily_report("🗓️ Sunday 9:00 PM Weekly Wrap + Monday Prep", sections),
-            parse_mode="HTML",
-        )
+        await self.telegram_app.bot.send_message(chat_id=self.chat_id, text=format_daily_report("📆 Weekly Wrap-Up", {"Summary": ["Weekly wrap-up placeholder ready for expansion."]}), parse_mode="HTML")

@@ -28,6 +28,7 @@ class PremarketService:
         watchlists = await self.watchlist_service.build_watchlists()
         day_candidates = await self.scanner_service.scan_day_trade_candidates()
         scan_stats = self.scanner_service.get_last_scan_stats()
+        high_impact = [e for e in econ_events if e.get('impact_label') == 'high']
 
         sections = {
             "Configuration": [
@@ -37,6 +38,7 @@ class PremarketService:
             "Market Overview": [
                 f"Market sentiment: {sentiment['sentiment']} ({sentiment['score']})",
                 f"Economic events today: {len(econ_events)}",
+                f"High-impact events: {len(high_impact)}",
                 f"Top headlines loaded: {len(headlines)}",
             ],
             "Universe": [
@@ -53,27 +55,12 @@ class PremarketService:
             ],
         }
 
-        await self.telegram_app.bot.send_message(
-            chat_id=self.chat_id,
-            text=format_daily_report("🌅 5:30 AM Pre-Market Report", sections),
-            parse_mode="HTML",
-        )
-
-        if scan_stats.get("evaluated") is not None:
-            await self.telegram_app.bot.send_message(
-                chat_id=self.chat_id,
-                text=format_scan_status(scan_stats),
-                parse_mode="HTML",
-            )
+        await self.telegram_app.bot.send_message(chat_id=self.chat_id, text=format_daily_report("🌅 5:30 AM Pre-Market Report", sections), parse_mode="HTML")
+        await self.telegram_app.bot.send_message(chat_id=self.chat_id, text=format_scan_status(scan_stats), parse_mode="HTML")
 
         for payload in day_candidates:
             trade_id = self.alert_service.create_trade_candidate(payload, broker="IBKR", instrument_type="stock")
             text = format_trade_alert({**payload, "trade_id": trade_id})
-            msg = await self.telegram_app.bot.send_message(
-                chat_id=self.chat_id,
-                text=text,
-                reply_markup=build_trade_keyboard(trade_id),
-                parse_mode="HTML",
-            )
+            msg = await self.telegram_app.bot.send_message(chat_id=self.chat_id, text=text, reply_markup=build_trade_keyboard(trade_id), parse_mode="HTML")
             if hasattr(self.alert_repo, "set_message_id"):
                 self.alert_repo.set_message_id(trade_id, msg.message_id)

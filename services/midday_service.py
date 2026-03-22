@@ -37,8 +37,4 @@ class MiddayService:
             ],
         }
 
-        await self.telegram_app.bot.send_message(
-            chat_id=self.chat_id,
-            text=format_daily_report("☀️ 10:00 AM Mid-Day Review", sections),
-            parse_mode="HTML",
-        )
+        await self.telegram_app.bot.send_message(chat_id=self.chat_id, text=format_daily_report("☀️ 10:00 AM Mid-Day Review", sections), parse_mode="HTML")

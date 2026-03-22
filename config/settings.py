@@ -43,6 +43,9 @@ class Settings:
     bot_day_trade_auto_close_time_ny: str
     bot_enable_screenshots: bool
     bot_storage_path: str
+    broker_enabled: bool
+    enable_ibkr: bool
+    enable_tradovate: bool
 
     @property
     def storage_path(self) -> Path:
@@ -60,7 +63,7 @@ def _get(name: str, default: str = '') -> str:
 
 
 def _get_bool(name: str, default: str = 'false') -> bool:
-    return _get(name, default).strip().lower() in {'1','true','yes','on'}
+    return _get(name, default).strip().lower() in {'1', 'true', 'yes', 'on'}
 
 
 def load_settings() -> Settings:
@@ -100,4 +103,7 @@ def load_settings() -> Settings:
         bot_day_trade_auto_close_time_ny=_get('BOT_DAY_TRADE_AUTO_CLOSE_TIME_NY', '15:45'),
         bot_enable_screenshots=_get_bool('BOT_ENABLE_SCREENSHOTS', 'true'),
         bot_storage_path=_get('BOT_STORAGE_PATH', 'storage'),
+        broker_enabled=_get_bool('BROKER_ENABLED', 'false'),
+        enable_ibkr=_get_bool('ENABLE_IBKR', 'false'),
+        enable_tradovate=_get_bool('ENABLE_TRADOVATE', 'false'),
     )

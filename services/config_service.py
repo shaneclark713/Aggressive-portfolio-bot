@@ -52,23 +52,41 @@ class ConfigService:
             if "." not in override_key:
                 continue
             category, field = override_key.split(".", 1)
+            category = category.lower()
             if category not in self.VALID_FILTER_CATEGORIES:
                 continue
             if category not in preset or not isinstance(preset[category], dict):
                 preset[category] = {}
             preset[category][field] = override_value
 
-        return {category: preset.get(category, {}) for category in self.VALID_FILTER_CATEGORIES}
+        return {
+            category: preset.get(category, {})
+            for category in self.VALID_FILTER_CATEGORIES
+        }
 
     def get_filter_category(self, category: str) -> Dict[str, Any]:
+        category = category.lower()
         self._ensure_valid_category(category)
         return self.resolve_filters().get(category, {})
 
     def get_filter_fields(self, category: str) -> Dict[str, Any]:
+        category = category.lower()
         return self.get_filter_category(category)
 
-    def set_filter_value(self, category: str, field: str, raw_value: str) -> Any:
+    def get_filter_value(self, category: str, field: str) -> Any:
+        category = category.lower()
         self._ensure_valid_category(category)
+
+        filters = self.resolve_filters()
+        if field not in filters.get(category, {}):
+            raise ValueError(f"Unknown filter field: {category}.{field}")
+
+        return filters[category][field]
+
+    def set_filter_value(self, category: str, field: str, raw_value: str) -> Any:
+        category = category.lower()
+        self._ensure_valid_category(category)
+
         filters = self.resolve_filters()
         if field not in filters[category]:
             raise ValueError(f"Unknown filter field: {category}.{field}")
@@ -80,7 +98,9 @@ class ConfigService:
         return parsed_value
 
     def reset_filter_category(self, category: str) -> None:
+        category = category.lower()
         self._ensure_valid_category(category)
+
         overrides = self.settings_repo.get_filter_overrides()
         prefix = f"{category}."
         for override_key in list(overrides.keys()):
@@ -98,6 +118,7 @@ class ConfigService:
 
     def _coerce_value(self, raw_value: str, current_value: Any) -> Any:
         raw = raw_value.strip()
+
         if isinstance(current_value, bool):
             lowered = raw.lower()
             if lowered in {"true", "1", "yes", "on"}:
@@ -105,10 +126,13 @@ class ConfigService:
             if lowered in {"false", "0", "no", "off"}:
                 return False
             raise ValueError("Expected boolean: true/false")
+
         if isinstance(current_value, int) and not isinstance(current_value, bool):
             return int(raw)
+
         if isinstance(current_value, float):
             return float(raw)
+
         return raw
 
     def _validate_filter_value(self, category: str, field: str, value: Any) -> None:

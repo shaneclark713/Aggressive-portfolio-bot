@@ -22,8 +22,7 @@ def _format_filter_category(category: str, values: dict) -> str:
         lines.append(f"- {key}: {value}")
     lines.append("")
     lines.append("Tap a field below to edit it.")
-    return "
-".join(lines)
+    return "\n".join(lines)
 
 
 async def start_command(update, context):
@@ -36,8 +35,7 @@ async def panel_command(update, context):
 
 async def config_command(update, context, config_service):
     await update.message.reply_text(
-        f"Preset: {config_service.get_active_preset()}
-"
+        f"Preset: {config_service.get_active_preset()}\n"
         f"Mode: {config_service.get_execution_mode()}"
     )
 
@@ -63,9 +61,7 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         candidates = await scanner.scan_day_trade_candidates()
         stats = scanner.get_last_scan_stats()
         await update.message.reply_text(
-            format_scan_status(stats) + f"
-
-Candidates returned: {len(candidates)}",
+            format_scan_status(stats) + f"\n\nCandidates returned: {len(candidates)}",
             parse_mode="HTML",
         )
 
@@ -77,7 +73,10 @@ Candidates returned: {len(candidates)}",
         if scanner is None:
             await update.message.reply_text("Scanner service not available.")
             return
-        await update.message.reply_text(format_scan_status(scanner.get_last_scan_stats()), parse_mode="HTML")
+        await update.message.reply_text(
+            format_scan_status(scanner.get_last_scan_stats()),
+            parse_mode="HTML",
+        )
 
     async def _pending_text(update, context):
         pending = context.user_data.get("pending_filter_edit")
@@ -97,14 +96,12 @@ Candidates returned: {len(candidates)}",
             new_value = config_service.set_filter_value(category, field, raw_value)
         except ValueError as exc:
             await update.message.reply_text(
-                f"Invalid value for {category}.{field}: {exc}
-Send a new value or /cancel."
+                f"Invalid value for {category}.{field}: {exc}\nSend a new value or /cancel."
             )
             return
         except Exception as exc:
             await update.message.reply_text(
-                f"Could not update {category}.{field}: {exc}
-Send /cancel to exit."
+                f"Could not update {category}.{field}: {exc}\nSend /cancel to exit."
             )
             return
 
@@ -136,8 +133,7 @@ Send /cancel to exit."
 
         if data == "cp|presets":
             await query.edit_message_text(
-                f"Select Preset
-Current: {config_service.get_active_preset()}",
+                f"Select Preset\nCurrent: {config_service.get_active_preset()}",
                 reply_markup=build_presets_keyboard(
                     config_service.get_available_presets(),
                     config_service.get_active_preset(),
@@ -147,8 +143,7 @@ Current: {config_service.get_active_preset()}",
 
         if data == "cp|mode":
             await query.edit_message_text(
-                f"Select Mode
-Current: {config_service.get_execution_mode()}",
+                f"Select Mode\nCurrent: {config_service.get_execution_mode()}",
                 reply_markup=build_mode_keyboard(config_service.get_execution_mode()),
             )
             return
@@ -164,7 +159,10 @@ Current: {config_service.get_execution_mode()}",
             filters_snapshot = config_service.resolve_filters()
             await query.edit_message_text(
                 "Choose a filter category to edit.",
-                reply_markup=build_filter_categories_keyboard(filters_snapshot, config_service.get_active_preset()),
+                reply_markup=build_filter_categories_keyboard(
+                    filters_snapshot,
+                    config_service.get_active_preset(),
+                ),
             )
             return
 
@@ -190,9 +188,7 @@ Current: {config_service.get_execution_mode()}",
             current_value = config_service.get_filter_value(category, field)
             context.user_data["pending_filter_edit"] = {"category": category, "field": field}
             await query.message.reply_text(
-                f"Send new value for {category}.{field}
-Current: {current_value}
-Use /cancel to stop."
+                f"Send new value for {category}.{field}\nCurrent: {current_value}\nUse /cancel to stop."
             )
             return
 
@@ -201,7 +197,10 @@ Use /cancel to stop."
             context.user_data.pop("pending_filter_edit", None)
             await query.edit_message_text(
                 "All filter overrides cleared.",
-                reply_markup=build_filter_categories_keyboard(config_service.resolve_filters(), config_service.get_active_preset()),
+                reply_markup=build_filter_categories_keyboard(
+                    config_service.resolve_filters(),
+                    config_service.get_active_preset(),
+                ),
             )
             return
 
@@ -225,21 +224,27 @@ Use /cancel to stop."
             if not open_trades:
                 await query.edit_message_text(
                     "No open bot positions found.",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅ Back", callback_data="cp|back")]]),
+                    reply_markup=InlineKeyboardMarkup(
+                        [[InlineKeyboardButton("⬅ Back", callback_data="cp|back")]]
+                    ),
                 )
                 return
             mode = config_service.get_execution_mode()
             if mode == "alerts_only":
                 await query.edit_message_text(
                     f"Found {len(open_trades)} open position(s), but execution mode is alerts_only, so no liquidation was sent.",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅ Back", callback_data="cp|back")]]),
+                    reply_markup=InlineKeyboardMarkup(
+                        [[InlineKeyboardButton("⬅ Back", callback_data="cp|back")]]
+                    ),
                 )
                 return
             for trade in open_trades:
                 trade_repo.update_trade_status(trade["trade_id"], "CLOSED")
             await query.edit_message_text(
                 f"Marked {len(open_trades)} position(s) as CLOSED.",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅ Back", callback_data="cp|back")]]),
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("⬅ Back", callback_data="cp|back")]]
+                ),
             )
             return
 
@@ -287,4 +292,4 @@ Use /cancel to stop."
         CommandHandler("cancel", cancel_command),
         MessageHandler(filters.TEXT & ~filters.COMMAND, _pending_text),
         CallbackQueryHandler(_guarded_callback),
-    ]
+        ]

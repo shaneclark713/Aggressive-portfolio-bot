@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any, Dict, Iterable
+from typing import Any, Dict, Iterable, List
 
 from config.filter_presets import FILTER_PRESETS
 
@@ -13,6 +13,9 @@ class ConfigService:
         self.settings_repo = settings_repo
         self.settings = settings
         self.default_execution_mode = settings.bot_default_execution_mode
+
+    def get_available_presets(self) -> List[str]:
+        return list(FILTER_PRESETS.keys())
 
     def get_active_preset(self) -> str:
         preset = self.settings_repo.get_active_preset()
@@ -133,6 +136,11 @@ class ConfigService:
         if isinstance(current_value, float):
             return float(raw)
 
+        if isinstance(current_value, list):
+            if raw == "":
+                return []
+            return [item.strip() for item in raw.split(",") if item.strip()]
+
         return raw
 
     def _validate_filter_value(self, category: str, field: str, value: Any) -> None:
@@ -149,8 +157,8 @@ class ConfigService:
         if field == "atr_min_pct" and not (0 <= value <= 1):
             raise ValueError("atr_min_pct must be between 0 and 1")
 
-        if field == "max_gap_pct" and not (0 <= value <= 1):
-            raise ValueError("max_gap_pct must be between 0 and 1")
+        if field == "max_gap_pct" and not (0 <= value <= 100):
+            raise ValueError("max_gap_pct must be between 0 and 100")
 
         if field == "max_short_float_pct" and not (0 <= value <= 100):
             raise ValueError("max_short_float_pct must be between 0 and 100")

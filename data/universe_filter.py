@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List
+from typing import List, Dict, Any
 
 import pandas as pd
 
@@ -13,14 +13,20 @@ logger = logging.getLogger("aggressive_portfolio_bot.data.universe_filter")
 class UniverseFilter:
     def __init__(self, market_client):
         self.market_client = market_client
+        self._last_watchlist_stats: Dict[str, Any] = {}
 
-    async def build_daily_watchlist(self) -> Dict[str, Any]:
+    def get_last_watchlist_stats(self) -> Dict[str, Any]:
+        return dict(self._last_watchlist_stats)
+
+    async def build_daily_watchlist(self) -> Dict[str, List[str]]:
         logger.info("Applying universe filters to build today's active watchlists...")
 
         day_trade_equities: List[str] = []
         swing_trade_equities: List[str] = []
-        day_trade_details: Dict[str, Dict[str, Any]] = {}
-        swing_trade_details: Dict[str, Dict[str, Any]] = {}
+        fetched = 0
+        passed_day = 0
+        passed_swing = 0
+        errors = 0
 
         for symbol in CORE_EQUITIES:
             try:
@@ -28,42 +34,58 @@ class UniverseFilter:
                     symbol=symbol,
                     multiplier=1,
                     timespan="day",
-                    start_date="2025-01-01",
-                    end_date="2026-12-31",
                 )
             except Exception as exc:
+                errors += 1
                 logger.exception("[%s] Failed to fetch historical data: %s", symbol, exc)
                 continue
 
-            if df.empty or len(df) < 30:
+            if df.empty or len(df) < 20:
+                logger.debug("[%s] Not enough daily data for universe filtering.", symbol)
                 continue
 
+            fetched += 1
             metrics = self._compute_metrics(df, symbol)
             if not metrics:
                 continue
 
             if self._passes_settings(metrics, DAY_TRADE_SETTINGS):
                 day_trade_equities.append(symbol)
-                day_trade_details[symbol] = metrics
+                passed_day += 1
 
             if self._passes_settings(metrics, SWING_TRADE_SETTINGS):
                 swing_trade_equities.append(symbol)
-                swing_trade_details[symbol] = metrics
+                passed_swing += 1
+
+        self._last_watchlist_stats = {
+            "symbols_considered": len(CORE_EQUITIES),
+            "symbols_fetched": fetched,
+            "day_trade_count": passed_day,
+            "swing_trade_count": passed_swing,
+            "errors": errors,
+        }
+
+        logger.info(
+            "Universe filter complete. day=%s swing=%s fetched=%s errors=%s",
+            passed_day,
+            passed_swing,
+            fetched,
+            errors,
+        )
 
         return {
             "day_trade_equities": sorted(set(day_trade_equities)),
             "swing_trade_equities": sorted(set(swing_trade_equities)),
             "futures": CORE_FUTURES,
-            "day_trade_details": day_trade_details,
-            "swing_trade_details": swing_trade_details,
         }
 
     def _compute_metrics(self, df: pd.DataFrame, symbol: str) -> Dict[str, Any]:
         required_cols = {"open", "high", "low", "close", "volume"}
         if not required_cols.issubset(df.columns):
+            logger.debug("[%s] Missing required columns for universe metrics.", symbol)
             return {}
 
-        work_df = df[list(required_cols)].dropna().copy()
+        work_df = df[["open", "high", "low", "close", "volume"]].dropna().copy()
         if len(work_df) < 20:
             return {}
 
@@ -78,6 +100,10 @@ class UniverseFilter:
         avg_daily_volume = float(work_df["volume"].tail(20).mean())
         avg_dollar_volume = float((work_df["close"] * work_df["volume"]).tail(20).mean())
         atr_14 = float(atr_series.iloc[-1])
+
+        if pd.isna(atr_14) or current_price <= 0:
+            logger.debug("[%s] Invalid ATR or current price.", symbol)
+            return {}
 
         prev_close = float(previous["close"])
         open_gap_pct = abs(float(latest["open"]) - prev_close) / prev_close if prev_close > 0 else 0.0
@@ -95,14 +121,11 @@ class UniverseFilter:
 
     def _calculate_atr(self, df: pd.DataFrame, period: int = 14) -> pd.Series:
         prev_close = df["close"].shift(1)
-        tr = pd.concat(
-            [
-                df["high"] - df["low"],
-                (df["high"] - prev_close).abs(),
-                (df["low"] - prev_close).abs(),
-            ],
-            axis=1,
-        ).max(axis=1)
+        tr = pd.concat([
+            df["high"] - df["low"],
+            (df["high"] - prev_close).abs(),
+            (df["low"] - prev_close).abs(),
+        ], axis=1).max(axis=1)
         return tr.rolling(window=period, min_periods=period).mean().dropna()
 
     def _passes_settings(self, metrics: Dict[str, Any], settings: Dict[str, Any]) -> bool:

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
+VALID_FILTER_CATEGORIES = ("descriptive", "fundamental", "technical")
+
 
 def _pretty_name(value: str) -> str:
     return value.replace("_", " ").title()
@@ -74,10 +76,11 @@ def build_strategies_keyboard(states: dict[str, bool]) -> InlineKeyboardMarkup:
 
 
 def build_filter_categories_keyboard(filters_snapshot: dict[str, dict], current_preset: str) -> InlineKeyboardMarkup:
-    rows = [
-        [InlineKeyboardButton(f"{_pretty_name(category)} ({len(values)})", callback_data=f"fcat|{category}")]
-        for category, values in filters_snapshot.items()
-    ]
+    rows = []
+    for category in VALID_FILTER_CATEGORIES:
+        values = filters_snapshot.get(category)
+        if isinstance(values, dict):
+            rows.append([InlineKeyboardButton(f"{_pretty_name(category)} ({len(values)})", callback_data=f"fcat|{category}")])
     rows.append([InlineKeyboardButton("♻ Reset All Filters", callback_data="freset|all")])
     rows.append([InlineKeyboardButton("⬅ Back", callback_data="cp|back")])
     return InlineKeyboardMarkup(rows)

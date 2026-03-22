@@ -1,40 +1,59 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-
-from brokers.execution_router import ExecutionRouter
+from config.settings import load_settings
+from config.logging_config import configure_logging
+from core.scheduler import build_scheduler, register_jobs
+from database.db import connect_db
+from database.migrations import run_migrations
+from database.repositories import TradeRepository, AlertRepository, ExecutionLogRepository
+from database.settings_repository import SettingsRepository
+from data.market_data import PolygonMarketDataClient
+from data.news_data import FinnhubNewsClient
+from data.econ_calendar import FinnhubEconomicCalendarClient
+from data.universe_filter import UniverseFilter
+from data.scanners import ScannerService
+from strategies.router import StrategyRouter
 from brokers.ibkr import IBKRClient
 from brokers.tradovate import TradovateClient
-from config.settings import load_settings
-from repositories.market_data import MarketDataRepository
-from repositories.settings_repo import SettingsRepository
-from repositories.trade_repo import TradeRepository
+from telegram_bot.bot import build_telegram_app
+from services.config_service import ConfigService
+from services.watchlist_service import WatchlistService
+from services.alert_service import AlertService
+from services.trade_review_service import TradeReviewService
+from services.premarket_service import PremarketService
 from services.midday_service import MiddayService
 from services.postmarket_service import PostmarketService
-from services.premarket_service import PremarketService
-from services.scanner import ScannerService
-from telegram_bot.bot import build_telegram_app
+from ledger.sheets_client import GoogleSheetsLedger
 
 
-async def main():
+async def main() -> None:
     settings = load_settings()
+    configure_logging(settings.log_level, settings.storage_path)
 
-    logging.basicConfig(
-        level=getattr(logging, settings.log_level.upper(), logging.INFO),
-        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-    )
+    run_migrations(settings.storage_path)
+    conn = connect_db(settings.storage_path)
 
-    settings.storage_path.mkdir(parents=True, exist_ok=True)
+    trade_repo = TradeRepository(conn)
+    alert_repo = AlertRepository(conn)
+    execution_log_repo = ExecutionLogRepository(conn)
+    settings_repo = SettingsRepository(conn)
 
-    settings_repo = SettingsRepository(settings.storage_path / "settings.json")
-    trade_repo = TradeRepository(settings.storage_path / "trades.json")
-    market_data = MarketDataRepository(
-        polygon_api_key=settings.polygon_api_key,
-        finnhub_api_key=settings.finnhub_api_key,
-    )
+    config_service = ConfigService(settings_repo, settings)
+    config_service.reset_execution_mode_on_boot()
+
+    market = PolygonMarketDataClient(settings.polygon_api_key)
+    news = FinnhubNewsClient(settings.finnhub_api_key)
+    econ = FinnhubEconomicCalendarClient(settings.finnhub_api_key)
+
+    await market.connect()
+    await news.connect()
+    await econ.connect()
+
+    router = StrategyRouter()
+    universe_filter = UniverseFilter(market)
+    scanner = ScannerService(market, universe_filter, router)
 
     ibkr = IBKRClient(
         settings.ibkr_host,
@@ -56,81 +75,110 @@ async def main():
         settings.tradovate_account_id,
     )
 
-    if settings.broker_enabled and settings.enable_ibkr:
+    try:
         await ibkr.connect()
+    except Exception:
+        pass
 
-    if settings.broker_enabled and settings.enable_tradovate:
+    try:
         await tradovate.connect()
+    except Exception:
+        pass
 
-    execution_router = ExecutionRouter(
-        ibkr_client=ibkr,
-        tradovate_client=tradovate,
+    sheets = GoogleSheetsLedger(
+        settings.google_credentials_dict,
+        settings.google_spreadsheet_id,
+        settings.google_options_worksheet,
+        settings.google_futures_worksheet,
+        settings.google_monthly_summary_worksheet,
     )
+    sheets.connect()
 
-    scanner = ScannerService(
-        market_data=market_data,
-        settings_repo=settings_repo,
+    watchlist_service = WatchlistService(universe_filter)
+    alert_service = AlertService(
+        alert_repo,
+        trade_repo,
+        execution_log_repo,
+        config_service,
+        settings,
     )
-
-    premarket_service = PremarketService(
-        scanner=scanner,
-        execution_router=execution_router,
-        settings_repo=settings_repo,
-        trade_repo=trade_repo,
-    )
-
-    midday_service = MiddayService(
-        market_data=market_data,
-        execution_router=execution_router,
-        settings_repo=settings_repo,
-        trade_repo=trade_repo,
-    )
-
-    postmarket_service = PostmarketService(
-        trade_repo=trade_repo,
-        settings_repo=settings_repo,
-    )
+    trade_review_service = TradeReviewService(trade_repo, settings)
 
     app_services = {
-        "settings_repo": settings_repo,
+        "alert_repo": alert_repo,
         "trade_repo": trade_repo,
-        "market_data": market_data,
-        "ibkr": ibkr,
-        "tradovate": tradovate,
-        "execution_router": execution_router,
+        "execution_log_repo": execution_log_repo,
         "scanner": scanner,
-        "premarket_service": premarket_service,
-        "midday_service": midday_service,
-        "postmarket_service": postmarket_service,
     }
 
     telegram_app = build_telegram_app(
-        bot_token=settings.telegram_bot_token,
-        admin_chat_id=settings.telegram_admin_chat_id,
-        app_services=app_services,
-        settings_repo=settings_repo,
+        settings.telegram_bot_token,
+        app_services,
+        config_service,
+        settings.telegram_admin_chat_id,
+    )
+    telegram_app.bot_data["app_services"] = app_services
+
+    premarket = PremarketService(
+        telegram_app,
+        settings.telegram_admin_chat_id,
+        news,
+        econ,
+        watchlist_service,
+        scanner,
+        alert_service,
+        config_service,
+        alert_repo,
     )
 
-    scheduler = AsyncIOScheduler(timezone=settings.app_timezone)
-    scheduler.add_job(premarket_service.run, trigger="cron", day_of_week="mon-fri", hour=6, minute=30)
-    scheduler.add_job(midday_service.run, trigger="cron", day_of_week="mon-fri", hour=10, minute=0)
-    scheduler.add_job(postmarket_service.run, trigger="cron", day_of_week="mon-fri", hour=13, minute=10)
-    scheduler.add_job(postmarket_service.run_weekly_wrapup, trigger="cron", day_of_week="fri", hour=13, minute=30)
-    scheduler.start()
+    midday = MiddayService(
+        telegram_app,
+        settings.telegram_admin_chat_id,
+        news,
+        ibkr,
+        tradovate,
+        trade_repo,
+        trade_review_service,
+    )
 
+    postmarket = PostmarketService(
+        telegram_app,
+        settings.telegram_admin_chat_id,
+        news,
+        trade_repo,
+    )
+
+    scheduler = build_scheduler(settings.app_timezone)
+    register_jobs(
+        scheduler,
+        {
+            "premarket": premarket,
+            "midday": midday,
+            "postmarket": postmarket,
+        },
+        settings.app_timezone,
+    )
+
+    scheduler.start()
     await telegram_app.initialize()
     await telegram_app.start()
     await telegram_app.updater.start_polling()
 
     try:
-        await asyncio.Event().wait()
+        while True:
+            alert_service.expire_alerts()
+            await asyncio.sleep(30)
     finally:
         await telegram_app.updater.stop()
         await telegram_app.stop()
         await telegram_app.shutdown()
-        scheduler.shutdown()
+        scheduler.shutdown(wait=False)
+        await market.close()
+        await news.close()
+        await econ.close()
         await ibkr.close()
         await tradovate.close()
+        conn.close()
 
 
 if __name__ == "__main__":

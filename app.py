@@ -108,6 +108,7 @@ async def main() -> None:
         "alert_repo": alert_repo,
         "trade_repo": trade_repo,
         "execution_log_repo": execution_log_repo,
+        "scanner": scanner,
     }
 
     telegram_app = build_telegram_app(
@@ -116,6 +117,7 @@ async def main() -> None:
         config_service,
         settings.telegram_admin_chat_id,
     )
+    telegram_app.bot_data["app_services"] = app_services
 
     premarket = PremarketService(
         telegram_app,

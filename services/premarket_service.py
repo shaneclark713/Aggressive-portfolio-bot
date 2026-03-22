@@ -4,7 +4,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from data.sentiment import analyze_sentiment
-from telegram_bot.formatters import format_daily_report, format_trade_alert
+from telegram_bot.formatters import format_daily_report, format_trade_alert, format_scan_status
 from telegram_bot.keyboards import build_trade_keyboard
 
 
@@ -27,32 +27,53 @@ class PremarketService:
         sentiment = analyze_sentiment(headlines)
         watchlists = await self.watchlist_service.build_watchlists()
         day_candidates = await self.scanner_service.scan_day_trade_candidates()
+        scan_stats = self.scanner_service.get_last_scan_stats()
 
-        bullets = [
-            f"Preset: {self.config_service.get_active_preset()}",
-            f"Mode: {self.config_service.get_execution_mode()}",
-            f"Market sentiment: {sentiment['sentiment']} ({sentiment['score']})",
-            f"Economic events today: {len(econ_events)}",
-            f"Day trade universe count: {len(watchlists['day_trade_equities'])}",
-            f"Swing trade universe count: {len(watchlists['swing_trade_equities'])}",
-            f"Futures universe: {', '.join(watchlists['futures'])}",
-            f"Scanned day-trade candidates: {len(day_candidates)}",
-        ]
+        sections = {
+            "Configuration": [
+                f"Active preset: {self.config_service.get_active_preset()}",
+                f"Execution mode: {self.config_service.get_execution_mode()}",
+            ],
+            "Market Overview": [
+                f"Market sentiment: {sentiment['sentiment']} ({sentiment['score']})",
+                f"Economic events today: {len(econ_events)}",
+                f"Top headlines loaded: {len(headlines)}",
+            ],
+            "Universe": [
+                f"Day trade universe: {len(watchlists['day_trade_equities'])}",
+                f"Swing trade universe: {len(watchlists['swing_trade_equities'])}",
+                f"Futures universe: {len(watchlists['futures'])}",
+            ],
+            "Scan": [
+                f"Universe loaded: {scan_stats.get('universe_loaded', 0)}",
+                f"Passed universe filters: {scan_stats.get('passed_universe_filters', 0)}",
+                f"Symbols evaluated: {scan_stats.get('evaluated', 0)}",
+                f"Qualified setups: {scan_stats.get('qualified', 0)}",
+                f"Errors: {scan_stats.get('errors', 0)}",
+            ],
+        }
 
         await self.telegram_app.bot.send_message(
             chat_id=self.chat_id,
-            text=format_daily_report("🌅 5:30 AM Pre-Market Report", bullets),
+            text=format_daily_report("🌅 5:30 AM Pre-Market Report", sections),
             parse_mode="HTML",
         )
 
+        if scan_stats.get("evaluated") is not None:
+            await self.telegram_app.bot.send_message(
+                chat_id=self.chat_id,
+                text=format_scan_status(scan_stats),
+                parse_mode="HTML",
+            )
+
         for payload in day_candidates:
-            alert_id = self.alert_service.create_trade_candidate(payload, broker="IBKR", instrument_type="stock")
-            text = format_trade_alert({**payload, "trade_id": alert_id})
-            message = await self.telegram_app.bot.send_message(
+            trade_id = self.alert_service.create_trade_candidate(payload, broker="IBKR", instrument_type="stock")
+            text = format_trade_alert({**payload, "trade_id": trade_id})
+            msg = await self.telegram_app.bot.send_message(
                 chat_id=self.chat_id,
                 text=text,
-                reply_markup=build_trade_keyboard(alert_id),
+                reply_markup=build_trade_keyboard(trade_id),
                 parse_mode="HTML",
             )
             if hasattr(self.alert_repo, "set_message_id"):
-                self.alert_repo.set_message_id(alert_id, message.message_id)
+                self.alert_repo.set_message_id(trade_id, msg.message_id)

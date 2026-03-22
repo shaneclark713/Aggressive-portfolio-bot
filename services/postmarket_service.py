@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from data.sentiment import analyze_sentiment
 from telegram_bot.formatters import format_daily_report
 
@@ -13,25 +15,41 @@ class PostmarketService:
         headlines = await self.news_client.fetch_market_news()
         sentiment = analyze_sentiment(headlines)
         open_trades = self.trade_repo.get_open_trades()
-        bullets = [
-            f"After-hours sentiment: {sentiment['sentiment']}",
-            f"Open bot-managed trades: {len(open_trades)}",
-            f"Review overnight event risk before holding swing setups.",
-        ]
+        long_count = sum(1 for trade in open_trades if str(trade.get("side", "")).upper() == "LONG")
+        short_count = sum(1 for trade in open_trades if str(trade.get("side", "")).upper() == "SHORT")
+
+        sections = {
+            "After-Hours Overview": [
+                f"After-hours sentiment: {sentiment['sentiment']} ({sentiment['score']})",
+                f"Headlines loaded: {len(headlines)}",
+            ],
+            "Bot Positions": [
+                f"Open bot-managed trades: {len(open_trades)}",
+                f"Long exposure count: {long_count}",
+                f"Short exposure count: {short_count}",
+            ],
+            "Tomorrow Prep": [
+                "Review failed scans and alert quality.",
+                "Confirm execution mode before the next session.",
+                "Use /scan to manually verify the scanner if needed.",
+            ],
+        }
+
         await self.telegram_app.bot.send_message(
             chat_id=self.chat_id,
-            text=format_daily_report("🌙 9:00 PM End of Day Wrap-Up", bullets),
+            text=format_daily_report("🌙 9:00 PM End of Day Wrap-Up", sections),
             parse_mode="HTML",
         )
 
     async def run_weekly_wrapup(self):
-        bullets = [
-            "Weekly summary complete.",
-            "Monday watchlist prep initiated.",
-            "Review strategy hit-rate and approval decisions.",
-        ]
+        sections = {
+            "Weekly Summary": [
+                "Weekly summary complete.",
+                "Monday watchlist prep initiated.",
+            ]
+        }
         await self.telegram_app.bot.send_message(
             chat_id=self.chat_id,
-            text=format_daily_report("🗓️ Sunday 9:00 PM Weekly Wrap + Monday Prep", bullets),
+            text=format_daily_report("🗓️ Sunday 9:00 PM Weekly Wrap + Monday Prep", sections),
             parse_mode="HTML",
         )

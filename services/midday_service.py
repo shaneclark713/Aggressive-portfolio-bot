@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from data.sentiment import analyze_sentiment
 from telegram_bot.formatters import format_daily_report
 
@@ -15,22 +17,28 @@ class MiddayService:
     async def run(self):
         headlines = await self.news_client.fetch_market_news()
         sentiment = analyze_sentiment(headlines)
-        ib_positions = await self.ibkr_client.get_positions() if getattr(self.ibkr_client, "is_connected", lambda: False)() else []
-        td_orders = await self.tradovate_client.get_open_orders() if getattr(self.tradovate_client, "token", None) else []
-
-        bullets = [
-            f"Intra-day market sentiment: {sentiment['sentiment']}",
-            f"IBKR positions tracked: {len(ib_positions)}",
-            f"Tradovate open orders: {len(td_orders)}",
-            f"Open bot trades: {len(self.trade_repo.get_open_trades())}",
-        ]
-
+        ib_positions = await self.ibkr_client.get_positions() if self.ibkr_client.is_connected() else []
+        td_orders = await self.tradovate_client.get_open_orders() if getattr(self.tradovate_client, 'token', None) else []
         due = self.trade_review_service.due_for_daytrade_autoclose()
-        if due:
-            bullets.append(f"Day trades due for 3:45 PM NY closeout: {len(due)}")
+        open_trades = self.trade_repo.get_open_trades()
+
+        sections = {
+            "Market Overview": [
+                f"Intra-day market sentiment: {sentiment['sentiment']} ({sentiment['score']})",
+                f"Headlines loaded: {len(headlines)}",
+            ],
+            "Broker State": [
+                f"IBKR positions tracked: {len(ib_positions)}",
+                f"Tradovate open orders: {len(td_orders)}",
+            ],
+            "Bot State": [
+                f"Open bot trades: {len(open_trades)}",
+                f"Day trades due for 3:45 PM NY closeout: {len(due)}",
+            ],
+        }
 
         await self.telegram_app.bot.send_message(
             chat_id=self.chat_id,
-            text=format_daily_report("☀️ 10:00 AM Mid-Day Review", bullets),
+            text=format_daily_report("☀️ 10:00 AM Mid-Day Review", sections),
             parse_mode="HTML",
         )

@@ -13,7 +13,18 @@ from telegram_bot.keyboards import build_trade_keyboard
 
 
 class PremarketService:
-    def __init__(self, telegram_app, chat_id, news_client, econ_client, watchlist_service, scanner_service, alert_service, config_service, alert_repo):
+    def __init__(
+        self,
+        telegram_app,
+        chat_id,
+        news_client,
+        econ_client,
+        watchlist_service,
+        scanner_service,
+        alert_service,
+        config_service,
+        alert_repo,
+    ):
         self.telegram_app = telegram_app
         self.chat_id = chat_id
         self.news_client = news_client
@@ -65,6 +76,7 @@ class PremarketService:
             text=format_daily_report("🌅 5:30 AM Pre-Market Report", sections),
             parse_mode="HTML",
         )
+
         await self.telegram_app.bot.send_message(
             chat_id=self.chat_id,
             text=format_scan_status(scan_stats),
@@ -72,13 +84,20 @@ class PremarketService:
         )
 
         for payload in day_candidates:
-            trade_id = await self.alert_service.create_trade_candidate(payload, broker="ALPACA", instrument_type="stock")
+            trade_id = await self.alert_service.create_trade_candidate(
+                payload,
+                broker="ALPACA",
+                instrument_type="stock",
+            )
+
             text = format_trade_alert({**payload, "trade_id": trade_id})
+
             msg = await self.telegram_app.bot.send_message(
                 chat_id=self.chat_id,
                 text=text,
                 reply_markup=build_trade_keyboard(trade_id),
                 parse_mode="HTML",
             )
+
             if hasattr(self.alert_repo, "set_message_id"):
-                self.alert_repo.set_message_id(trade_id, msg.message_id)\n
+                self.alert_repo.set_message_id(trade_id, msg.message_id)

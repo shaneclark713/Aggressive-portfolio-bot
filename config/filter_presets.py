@@ -72,4 +72,4 @@ FILTER_PRESETS = {
             "minimum_rr_ratio": 2.25,
         },
     },
-}\n
+}

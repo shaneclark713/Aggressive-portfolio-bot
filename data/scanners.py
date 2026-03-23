@@ -30,7 +30,13 @@ class ScannerService:
             return "timeout"
         return exc.__class__.__name__
 
-    async def _scan_symbols(self, symbols: list[str], multiplier: int, timespan: str, scan_label: str) -> List[Dict[str, Any]]:
+    async def _scan_symbols(
+        self,
+        symbols: list[str],
+        multiplier: int,
+        timespan: str,
+        scan_label: str,
+    ) -> List[Dict[str, Any]]:
         candidates: List[Dict[str, Any]] = []
         errors = 0
         evaluated = 0
@@ -44,7 +50,12 @@ class ScannerService:
 
         for index, symbol in enumerate(symbols):
             try:
-                df = await self.market_client.get_historical_data(symbol=symbol, multiplier=multiplier, timespan=timespan)
+                df = await self.market_client.get_historical_data(
+                    symbol=symbol,
+                    multiplier=multiplier,
+                    timespan=timespan,
+                )
+
                 if df.empty:
                     error_examples.append(f"{symbol}: empty_data")
                     continue
@@ -56,11 +67,19 @@ class ScannerService:
 
                 symbol_news_count = 0
                 catalyst_headlines: list[str] = []
+
                 if self.news_client is not None:
                     try:
-                        symbol_news = await self.news_client.fetch_ticker_news(symbol, start_date=start, end_date=today)
+                        symbol_news = await self.news_client.fetch_ticker_news(
+                            symbol,
+                            start_date=start,
+                            end_date=today,
+                        )
                         symbol_news_count = len(symbol_news)
-                        catalyst_headlines = self.news_client.summarize_headlines(symbol_news, limit=3)
+                        catalyst_headlines = self.news_client.summarize_headlines(
+                            symbol_news,
+                            limit=3,
+                        )
                     except Exception:
                         pass
 
@@ -80,7 +99,12 @@ class ScannerService:
                 if compact == "rate_limited":
                     rate_limited += 1
                 error_examples.append(f"{symbol}: {compact}")
-                logger.warning("Scanner failed for %s during %s: %s", symbol, scan_label, compact)
+                logger.warning(
+                    "Scanner failed for %s during %s: %s",
+                    symbol,
+                    scan_label,
+                    compact,
+                )
 
             finally:
                 if index < len(symbols) - 1:
@@ -100,35 +124,69 @@ class ScannerService:
             "top_symbols": top_symbols[:10],
             "error_examples": error_examples[:10],
         }
+
         logger.info(
             "Scan %s complete | universe=%s evaluated=%s setups=%s errors=%s rate_limited=%s",
-            scan_label, len(symbols), evaluated, qualified, errors, rate_limited
+            scan_label,
+            len(symbols),
+            evaluated,
+            qualified,
+            errors,
+            rate_limited,
         )
+
         return candidates
 
     async def scan_day_trade_candidates(self) -> List[Dict[str, Any]]:
         watchlist = await self.universe_filter.build_daily_watchlist()
-        return await self._scan_symbols(watchlist["day_trade_equities"], multiplier=5, timespan="minute", scan_label="day_trade")
+        return await self._scan_symbols(
+            watchlist["day_trade_equities"],
+            multiplier=5,
+            timespan="minute",
+            scan_label="day_trade",
+        )
 
     async def scan_swing_trade_candidates(self) -> List[Dict[str, Any]]:
         watchlist = await self.universe_filter.build_daily_watchlist()
-        return await self._scan_symbols(watchlist["swing_trade_equities"], multiplier=1, timespan="day", scan_label="swing_trade")
+        return await self._scan_symbols(
+            watchlist["swing_trade_equities"],
+            multiplier=1,
+            timespan="day",
+            scan_label="swing_trade",
+        )
 
     async def scan_market_overview(self) -> Dict[str, Any]:
         candidates = await self.scan_day_trade_candidates()
-        return {"stats": self.get_last_scan_stats(), "candidates": candidates}
+        return {
+            "stats": self.get_last_scan_stats(),
+            "candidates": candidates,
+        }
 
     async def scan_news_overview(self, limit: int = 8) -> Dict[str, Any]:
         if self.news_client is None:
-            return {"headline_count": 0, "headlines": []}
+            return {
+                "headline_count": 0,
+                "headlines": [],
+            }
+
         headlines = await self.news_client.fetch_market_news()
         summary = self.news_client.summarize_headlines(headlines, limit=limit)
-        return {"headline_count": len(headlines), "headlines": summary}
+
+        return {
+            "headline_count": len(headlines),
+            "headlines": summary,
+        }
 
     async def scan_events_overview(self) -> Dict[str, Any]:
         if self.econ_client is None:
-            return {"event_count": 0, "events": [], "high_impact_count": 0}
+            return {
+                "event_count": 0,
+                "events": [],
+                "high_impact_count": 0,
+            }
+
         events = await self.econ_client.fetch_events(date.today())
+
         return {
             "event_count": len(events),
             "high_impact_count": len(self.econ_client.high_impact_events(events)),
@@ -137,16 +195,38 @@ class ScannerService:
 
     async def scan_catalyst_overview(self, limit: int = 6) -> Dict[str, Any]:
         if self.news_client is None:
-            return {"symbols_checked": 0, "catalysts": []}
+            return {
+                "symbols_checked": 0,
+                "catalysts": [],
+            }
+
         watchlist = await self.universe_filter.build_daily_watchlist()
         symbols = watchlist["day_trade_equities"][:limit]
         rows = []
+
         for symbol in symbols:
             try:
                 headlines = await self.news_client.fetch_ticker_news(symbol)
                 top = self.news_client.summarize_headlines(headlines, limit=2)
-                rows.append({"symbol": symbol, "headline_count": len(headlines), "headlines": top})
+                rows.append(
+                    {
+                        "symbol": symbol,
+                        "headline_count": len(headlines),
+                        "headlines": top,
+                    }
+                )
             except Exception as exc:
-                rows.append({"symbol": symbol, "headline_count": 0, "headlines": [f"error: {self._compact_error(exc)}"]})
+                rows.append(
+                    {
+                        "symbol": symbol,
+                        "headline_count": 0,
+                        "headlines": [f"error: {self._compact_error(exc)}"],
+                    }
+                )
+
             await asyncio.sleep(0.35)
-        return {"symbols_checked": len(symbols), "catalysts": rows}\n
+
+        return {
+            "symbols_checked": len(symbols),
+            "catalysts": rows,
+        }

@@ -102,12 +102,7 @@ class ScannerService:
         }
         logger.info(
             "Scan %s complete | universe=%s evaluated=%s setups=%s errors=%s rate_limited=%s",
-            scan_label,
-            len(symbols),
-            evaluated,
-            qualified,
-            errors,
-            rate_limited,
+            scan_label, len(symbols), evaluated, qualified, errors, rate_limited
         )
         return candidates
 
@@ -118,3 +113,40 @@ class ScannerService:
     async def scan_swing_trade_candidates(self) -> List[Dict[str, Any]]:
         watchlist = await self.universe_filter.build_daily_watchlist()
         return await self._scan_symbols(watchlist["swing_trade_equities"], multiplier=1, timespan="day", scan_label="swing_trade")
+
+    async def scan_market_overview(self) -> Dict[str, Any]:
+        candidates = await self.scan_day_trade_candidates()
+        return {"stats": self.get_last_scan_stats(), "candidates": candidates}
+
+    async def scan_news_overview(self, limit: int = 8) -> Dict[str, Any]:
+        if self.news_client is None:
+            return {"headline_count": 0, "headlines": []}
+        headlines = await self.news_client.fetch_market_news()
+        summary = self.news_client.summarize_headlines(headlines, limit=limit)
+        return {"headline_count": len(headlines), "headlines": summary}
+
+    async def scan_events_overview(self) -> Dict[str, Any]:
+        if self.econ_client is None:
+            return {"event_count": 0, "events": [], "high_impact_count": 0}
+        events = await self.econ_client.fetch_events(date.today())
+        return {
+            "event_count": len(events),
+            "high_impact_count": len(self.econ_client.high_impact_events(events)),
+            "events": self.econ_client.summarize_events(events, limit=8),
+        }
+
+    async def scan_catalyst_overview(self, limit: int = 6) -> Dict[str, Any]:
+        if self.news_client is None:
+            return {"symbols_checked": 0, "catalysts": []}
+        watchlist = await self.universe_filter.build_daily_watchlist()
+        symbols = watchlist["day_trade_equities"][:limit]
+        rows = []
+        for symbol in symbols:
+            try:
+                headlines = await self.news_client.fetch_ticker_news(symbol)
+                top = self.news_client.summarize_headlines(headlines, limit=2)
+                rows.append({"symbol": symbol, "headline_count": len(headlines), "headlines": top})
+            except Exception as exc:
+                rows.append({"symbol": symbol, "headline_count": 0, "headlines": [f"error: {self._compact_error(exc)}"]})
+            await asyncio.sleep(0.35)
+        return {"symbols_checked": len(symbols), "catalysts": rows}\n

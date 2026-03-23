@@ -50,6 +50,7 @@ class PolygonMarketDataClient:
             raise RuntimeError("Polygon session not connected")
 
         last_error: Exception | None = None
+
         for attempt in range(retries):
             try:
                 async with self.session.get(endpoint, params=params) as response:
@@ -58,13 +59,16 @@ class PolygonMarketDataClient:
                             await asyncio.sleep(1.5 * (attempt + 1))
                             continue
                         raise RuntimeError("rate_limited")
+
                     if response.status >= 500:
                         if attempt < retries - 1:
                             await asyncio.sleep(1.0 * (attempt + 1))
                             continue
                         raise RuntimeError(f"polygon_http_{response.status}")
+
                     response.raise_for_status()
                     return await response.json()
+
             except aiohttp.ClientResponseError as exc:
                 last_error = exc
                 if exc.status == 429:
@@ -73,6 +77,7 @@ class PolygonMarketDataClient:
                         continue
                     raise RuntimeError("rate_limited") from exc
                 raise RuntimeError(f"polygon_http_{exc.status}") from exc
+
             except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
                 last_error = exc
                 if attempt < retries - 1:
@@ -118,12 +123,14 @@ class PolygonMarketDataClient:
                 "n": "transactions",
             }
         )
+
         df["datetime"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
         df = df.set_index("datetime").sort_index()
 
         for column in ["open", "high", "low", "close", "volume"]:
             if column not in df.columns:
                 df[column] = pd.NA
+
         return df
 
     async def get_latest_price(self, symbol: str):
@@ -143,6 +150,7 @@ class PolygonMarketDataClient:
     async def get_premarket_snapshot(self, symbol: str) -> dict:
         now_ny = datetime.now(ZoneInfo("America/New_York"))
         session_date = now_ny.date().isoformat()
+
         minute_df = await self.get_historical_data(
             symbol=symbol,
             multiplier=5,
@@ -151,17 +159,29 @@ class PolygonMarketDataClient:
             end_date=session_date,
         )
         if minute_df.empty:
-            return {"premarket_volume": 0, "premarket_gap_min_percent": 0.0}
+            return {
+                "premarket_volume": 0,
+                "premarket_gap_min_percent": 0.0,
+            }
 
         ny_index = minute_df.index.tz_convert("America/New_York")
         premarket_mask = (ny_index.hour > 4) | ((ny_index.hour == 4) & (ny_index.minute >= 0))
         premarket_mask &= (ny_index.hour < 9) | ((ny_index.hour == 9) & (ny_index.minute < 30))
         premarket = minute_df.loc[premarket_mask]
+
         if premarket.empty:
-            return {"premarket_volume": 0, "premarket_gap_min_percent": 0.0}
+            return {
+                "premarket_volume": 0,
+                "premarket_gap_min_percent": 0.0,
+            }
 
         premarket_volume = float(premarket["volume"].fillna(0).sum())
-        premarket_open = float(premarket["open"].dropna().iloc[0]) if not premarket["open"].dropna().empty else None
+        premarket_open = (
+            float(premarket["open"].dropna().iloc[0])
+            if not premarket["open"].dropna().empty
+            else None
+        )
+
         prev_daily = await self.get_historical_data(symbol=symbol, multiplier=1, timespan="day")
         prev_close = None
         if not prev_daily.empty and len(prev_daily) >= 2:
@@ -176,4 +196,4 @@ class PolygonMarketDataClient:
         return {
             "premarket_volume": premarket_volume,
             "premarket_gap_min_percent": gap_pct,
-        }\n
+        }

@@ -30,6 +30,7 @@ def format_trade_alert(payload: dict) -> str:
     metrics = payload.get("metrics", {})
     reasons = payload.get("trigger_reasons", [])
     news_count = int(payload.get("news_count", 0) or 0)
+    catalyst_headlines = payload.get("catalyst_headlines", [])[:3]
 
     entry_zone_text = " / ".join(f"${_to_float(v):.2f}" for v in entry_zone) if entry_zone else "N/A"
     targets_text = " | ".join(f"${_to_float(v):.2f}" for v in targets) if targets else f"${take_profit:.2f}"
@@ -38,6 +39,7 @@ def format_trade_alert(payload: dict) -> str:
     adx_val = _to_float(metrics.get("adx_14"))
 
     reason_lines = "\n".join(f"• {escape(str(item))}" for item in reasons[:5]) if reasons else "• Criteria cluster passed"
+    catalyst_lines = "\n".join(f"• {escape(str(item))}" for item in catalyst_headlines) if catalyst_headlines else "• No fresh ticker-specific headlines loaded"
 
     return (
         f"🚨 <b>{symbol} | {strategy}</b>\n"
@@ -58,6 +60,7 @@ def format_trade_alert(payload: dict) -> str:
         f"<b>ATR %:</b> {atr_pct:.2f}%\n"
         f"<b>ADX:</b> {adx_val:.2f}\n\n"
         f"<b>Why it triggered</b>\n{reason_lines}\n\n"
+        f"<b>Catalyst Headlines</b>\n{catalyst_lines}\n\n"
         f"<i>Approve, paper, or reject the setup.</i>"
     )
 
@@ -80,8 +83,9 @@ def format_scan_status(stats: Mapping[str, Any]) -> str:
     if not stats:
         return "🔎 <b>Scan Status</b>\n\nNo scans have been recorded yet."
 
-    errors = stats.get('errors', 0)
-    error_examples = stats.get('error_examples', [])[:5]
+    errors = stats.get("errors", 0)
+    rate_limited = stats.get("rate_limited", 0)
+    error_examples = stats.get("error_examples", [])[:5]
     error_block = "\n".join(f"• {escape(str(item))}" for item in error_examples) if error_examples else "• None"
 
     return (
@@ -92,7 +96,16 @@ def format_scan_status(stats: Mapping[str, Any]) -> str:
         f"<b>Passed Universe Filters:</b> {stats.get('passed_universe_filters', stats.get('universe_loaded', 0))}\n"
         f"<b>Symbols Evaluated:</b> {stats.get('symbols_evaluated', stats.get('evaluated', 0))}\n"
         f"<b>Qualified Setups:</b> {stats.get('qualified_setups', stats.get('qualified', 0))}\n"
+        f"<b>Rate Limited:</b> {rate_limited}\n"
         f"<b>Errors:</b> {errors}\n"
         f"<b>Top Symbols:</b> {escape(', '.join(stats.get('top_symbols', [])[:10]) or 'None')}\n\n"
         f"<b>Error Examples</b>\n{error_block}"
     )
+
+
+def format_tomorrow_plan(plan: Iterable[Any]) -> str:
+    bullets = list(plan)
+    if not bullets:
+        bullets = ["No clear bias yet. Stay selective and keep risk small."]
+    body = "\n".join(f"• {escape(str(item))}" for item in bullets)
+    return f"🧭 <b>Tomorrow Game Plan</b>\n\n{body}"

@@ -59,7 +59,10 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         await update.message.reply_text("Running manual scan...")
         candidates = await scanner.scan_day_trade_candidates()
         stats = scanner.get_last_scan_stats()
-        await update.message.reply_text(format_scan_status(stats) + f"\n\nCandidates returned: {len(candidates)}", parse_mode="HTML")
+        await update.message.reply_text(
+            format_scan_status(stats) + f"\n\nCandidates returned: {len(candidates)}",
+            parse_mode="HTML",
+        )
 
     async def _scan_status(update, context):
         if update.effective_chat.id != admin_chat_id:
@@ -92,7 +95,10 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
             return
         context.user_data.pop("pending_filter_edit", None)
         values = config_service.get_filter_fields(category)
-        await update.message.reply_text(f"Updated {category}.{field} to {new_value}.", reply_markup=build_filter_fields_keyboard(category, values))
+        await update.message.reply_text(
+            f"Updated {category}.{field} to {new_value}.",
+            reply_markup=build_filter_fields_keyboard(category, values),
+        )
 
     async def _guarded_callback(update, context):
         query = update.callback_query
@@ -125,7 +131,10 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
             return
         if data == "cp|filters":
             filters_snapshot = config_service.resolve_filters()
-            await query.edit_message_text("Choose a filter category to edit.", reply_markup=build_filter_categories_keyboard(filters_snapshot, config_service.get_active_preset()))
+            await query.edit_message_text(
+                "Choose a filter category to edit.",
+                reply_markup=build_filter_categories_keyboard(filters_snapshot, config_service.get_active_preset()),
+            )
             return
         if data.startswith("fcat|"):
             category = data.split("|", 1)[1].lower()
@@ -134,7 +143,10 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
                 return
             values = config_service.get_filter_fields(category)
             context.user_data.pop("pending_filter_edit", None)
-            await query.edit_message_text(_format_filter_category(category, values), reply_markup=build_filter_fields_keyboard(category, values))
+            await query.edit_message_text(
+                _format_filter_category(category, values),
+                reply_markup=build_filter_fields_keyboard(category, values),
+            )
             return
         if data.startswith("fedit|"):
             _, category, field = data.split("|", 2)
@@ -144,12 +156,17 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
                 return
             current_value = config_service.get_filter_value(category, field)
             context.user_data["pending_filter_edit"] = {"category": category, "field": field}
-            await query.message.reply_text(f"Send new value for {category}.{field}\nCurrent: {current_value}\nUse /cancel to stop.")
+            await query.message.reply_text(
+                f"Send new value for {category}.{field}\nCurrent: {current_value}\nUse /cancel to stop."
+            )
             return
         if data == "freset|all":
             config_service.reset_filter_overrides()
             context.user_data.pop("pending_filter_edit", None)
-            await query.edit_message_text("All filter overrides cleared.", reply_markup=build_filter_categories_keyboard(config_service.resolve_filters(), config_service.get_active_preset()))
+            await query.edit_message_text(
+                "All filter overrides cleared.",
+                reply_markup=build_filter_categories_keyboard(config_service.resolve_filters(), config_service.get_active_preset()),
+            )
             return
         if data.startswith("freset|"):
             category = data.split("|", 1)[1].lower()
@@ -159,7 +176,10 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
             config_service.reset_filter_overrides(category=category)
             values = config_service.get_filter_fields(category)
             context.user_data.pop("pending_filter_edit", None)
-            await query.edit_message_text(f"Reset {category} overrides.", reply_markup=build_filter_fields_keyboard(category, values))
+            await query.edit_message_text(
+                f"Reset {category} overrides.",
+                reply_markup=build_filter_fields_keyboard(category, values),
+            )
             return
         if data.startswith("set|preset|"):
             preset_name = data.split("|", 2)[2]

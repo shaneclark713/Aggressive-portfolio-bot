@@ -17,8 +17,8 @@ class MiddayService:
     async def run(self):
         headlines = await self.news_client.fetch_market_news()
         sentiment = analyze_sentiment(headlines)
-        ib_positions = await self.ibkr_client.get_positions() if self.ibkr_client.is_connected() else []
-        td_orders = await self.tradovate_client.get_open_orders() if getattr(self.tradovate_client, 'token', None) else []
+        ib_positions = await self.ibkr_client.get_positions() if getattr(self.ibkr_client, "is_connected", lambda: False)() else []
+        td_orders = await self.tradovate_client.get_open_orders() if getattr(self.tradovate_client, "token", None) else []
         due = self.trade_review_service.due_for_daytrade_autoclose()
         open_trades = self.trade_repo.get_open_trades()
 
@@ -35,6 +35,15 @@ class MiddayService:
                 f"Open bot trades: {len(open_trades)}",
                 f"Day trades due for 3:45 PM NY closeout: {len(due)}",
             ],
+            "Midday Read": [
+                "Press winners only if they still respect structure.",
+                "Cut weak names faster in chop conditions.",
+                "Avoid opening fresh size right before scheduled economic releases.",
+            ],
         }
 
-        await self.telegram_app.bot.send_message(chat_id=self.chat_id, text=format_daily_report("☀️ 10:00 AM Mid-Day Review", sections), parse_mode="HTML")
+        await self.telegram_app.bot.send_message(
+            chat_id=self.chat_id,
+            text=format_daily_report("☀️ 10:00 AM Mid-Day Review", sections),
+            parse_mode="HTML",
+        )

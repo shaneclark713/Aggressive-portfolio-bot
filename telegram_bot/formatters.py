@@ -73,6 +73,7 @@ def format_daily_report(title: str, sections: Mapping[str, Iterable[Any]] | Iter
             else:
                 parts.append("• None")
         return "\n".join(parts)
+
     body = "\n".join(f"• {escape(str(item))}" for item in sections)
     return f"📊 <b>{escape(title)}</b>\n\n{body}"
 
@@ -80,8 +81,10 @@ def format_daily_report(title: str, sections: Mapping[str, Iterable[Any]] | Iter
 def format_scan_status(stats: Mapping[str, Any]) -> str:
     if not stats:
         return "🔎 <b>Scan Status</b>\n\nNo scans have been recorded yet."
+
     error_examples = stats.get("error_examples", [])[:5]
     error_block = "\n".join(f"• {escape(str(item))}" for item in error_examples) if error_examples else "• None"
+
     return (
         "🔎 <b>Scan Status</b>\n\n"
         f"<b>Label:</b> {escape(str(stats.get('scan_label', 'unknown')))}\n"
@@ -127,10 +130,11 @@ def format_catalyst_scan(summary: Mapping[str, Any]) -> str:
         count = item.get("headline_count", 0)
         top = " | ".join(item.get("headlines", [])[:2]) or "No headlines"
         rows.append(f"{symbol}: {count} headline(s) | {top}")
+
     return format_daily_report(
         "⚡ Catalyst Scan",
         {
             "Summary": [f"Symbols checked: {summary.get('symbols_checked', 0)}"],
             "Catalysts": rows or ["No catalyst headlines loaded"],
         },
-    )\n
+    )

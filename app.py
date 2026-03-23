@@ -17,6 +17,8 @@ from data.scanners import ScannerService
 from strategies.router import StrategyRouter
 from brokers.ibkr import IBKRClient
 from brokers.tradovate import TradovateClient
+from brokers.alpaca import AlpacaClient
+from brokers.execution_router import ExecutionRouter
 from telegram_bot.bot import build_telegram_app
 from services.config_service import ConfigService
 from services.watchlist_service import WatchlistService
@@ -53,26 +55,32 @@ async def main() -> None:
 
     router = StrategyRouter()
     universe_filter = UniverseFilter(market)
-    scanner = ScannerService(market, universe_filter, router)
+    scanner = ScannerService(market, universe_filter, router, news_client=news, econ_client=econ)
 
     ibkr = IBKRClient(
-        settings.ibkr_host,
-        settings.ibkr_port,
-        settings.ibkr_client_id,
-        settings.ibkr_account_id,
+        getattr(settings, "ibkr_host", "127.0.0.1"),
+        getattr(settings, "ibkr_port", 7497),
+        getattr(settings, "ibkr_client_id", 1),
+        getattr(settings, "ibkr_account_id", ""),
     )
 
     tradovate = TradovateClient(
-        settings.tradovate_base_url,
-        settings.tradovate_ws_url,
-        settings.tradovate_username,
-        settings.tradovate_password,
-        settings.tradovate_cid,
-        settings.tradovate_secret,
-        settings.tradovate_app_id,
-        settings.tradovate_app_version,
-        settings.tradovate_device_id,
-        settings.tradovate_account_id,
+        getattr(settings, "tradovate_base_url", ""),
+        getattr(settings, "tradovate_ws_url", ""),
+        getattr(settings, "tradovate_username", ""),
+        getattr(settings, "tradovate_password", ""),
+        getattr(settings, "tradovate_cid", ""),
+        getattr(settings, "tradovate_secret", ""),
+        getattr(settings, "tradovate_app_id", ""),
+        getattr(settings, "tradovate_app_version", ""),
+        getattr(settings, "tradovate_device_id", ""),
+        getattr(settings, "tradovate_account_id", ""),
+    )
+
+    alpaca = AlpacaClient(
+        api_key=getattr(settings, "alpaca_api_key", ""),
+        secret_key=getattr(settings, "alpaca_secret_key", ""),
+        base_url=getattr(settings, "alpaca_base_url", "https://paper-api.alpaca.markets"),
     )
 
     try:
@@ -85,6 +93,11 @@ async def main() -> None:
     except Exception:
         pass
 
+    try:
+        await alpaca.connect()
+    except Exception:
+        pass
+
     sheets = GoogleSheetsLedger(
         settings.google_credentials_dict,
         settings.google_spreadsheet_id,
@@ -94,6 +107,8 @@ async def main() -> None:
     )
     sheets.connect()
 
+    execution_router = ExecutionRouter(ibkr_client=ibkr, tradovate_client=tradovate, alpaca_client=alpaca)
+
     watchlist_service = WatchlistService(universe_filter)
     alert_service = AlertService(
         alert_repo,
@@ -101,6 +116,7 @@ async def main() -> None:
         execution_log_repo,
         config_service,
         settings,
+        execution_router=execution_router,
     )
     trade_review_service = TradeReviewService(trade_repo, settings)
 
@@ -109,6 +125,8 @@ async def main() -> None:
         "trade_repo": trade_repo,
         "execution_log_repo": execution_log_repo,
         "scanner": scanner,
+        "alert_service": alert_service,
+        "execution_router": execution_router,
     }
 
     telegram_app = build_telegram_app(
@@ -178,6 +196,7 @@ async def main() -> None:
         await econ.close()
         await ibkr.close()
         await tradovate.close()
+        await alpaca.close()
         conn.close()
 
 

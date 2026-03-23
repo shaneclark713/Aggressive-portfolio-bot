@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List
 
 from config.symbols import benchmark_for_symbol
@@ -24,23 +24,13 @@ class ScannerService:
 
     def _compact_error(self, exc: Exception) -> str:
         text = str(exc).lower()
-        if "rate_limited" in text or "429" in text or "too many requests" in text:
+        if "429" in text or "rate_limited" in text or "too many requests" in text:
             return "rate_limited"
         if "timeout" in text:
             return "timeout"
-        if "request_failed" in text:
-            return "request_failed"
-        if "polygon_http_" in text:
-            return text
         return exc.__class__.__name__
 
-    async def _scan_symbols(
-        self,
-        symbols: list[str],
-        multiplier: int,
-        timespan: str,
-        scan_label: str,
-    ) -> List[Dict[str, Any]]:
+    async def _scan_symbols(self, symbols: list[str], multiplier: int, timespan: str, scan_label: str) -> List[Dict[str, Any]]:
         candidates: List[Dict[str, Any]] = []
         errors = 0
         evaluated = 0
@@ -49,14 +39,12 @@ class ScannerService:
         error_examples: list[str] = []
         rate_limited = 0
         scan_time = datetime.now(timezone.utc).isoformat()
+        today = date.today().isoformat()
+        start = (date.today() - timedelta(days=3)).isoformat()
 
         for index, symbol in enumerate(symbols):
             try:
-                df = await self.market_client.get_historical_data(
-                    symbol=symbol,
-                    multiplier=multiplier,
-                    timespan=timespan,
-                )
+                df = await self.market_client.get_historical_data(symbol=symbol, multiplier=multiplier, timespan=timespan)
                 if df.empty:
                     error_examples.append(f"{symbol}: empty_data")
                     continue
@@ -67,17 +55,20 @@ class ScannerService:
                     continue
 
                 symbol_news_count = 0
+                catalyst_headlines: list[str] = []
                 if self.news_client is not None:
                     try:
-                        symbol_news = await self.news_client.fetch_ticker_news(symbol)
+                        symbol_news = await self.news_client.fetch_ticker_news(symbol, start_date=start, end_date=today)
                         symbol_news_count = len(symbol_news)
+                        catalyst_headlines = self.news_client.summarize_headlines(symbol_news, limit=3)
                     except Exception:
-                        symbol_news_count = 0
+                        pass
 
                 payload["benchmark"] = benchmark_for_symbol(symbol)
                 payload["scan_label"] = scan_label
                 payload["scan_timestamp_utc"] = scan_time
                 payload["news_count"] = symbol_news_count
+                payload["catalyst_headlines"] = catalyst_headlines
                 candidates.append(payload)
 
                 qualified += 1
@@ -93,7 +84,7 @@ class ScannerService:
 
             finally:
                 if index < len(symbols) - 1:
-                    await asyncio.sleep(0.35)
+                    await asyncio.sleep(0.75)
 
         self._last_scan_stats = {
             "scan_label": scan_label,
@@ -109,7 +100,6 @@ class ScannerService:
             "top_symbols": top_symbols[:10],
             "error_examples": error_examples[:10],
         }
-
         logger.info(
             "Scan %s complete | universe=%s evaluated=%s setups=%s errors=%s rate_limited=%s",
             scan_label,
@@ -123,18 +113,8 @@ class ScannerService:
 
     async def scan_day_trade_candidates(self) -> List[Dict[str, Any]]:
         watchlist = await self.universe_filter.build_daily_watchlist()
-        return await self._scan_symbols(
-            watchlist["day_trade_equities"],
-            multiplier=5,
-            timespan="minute",
-            scan_label="day_trade",
-        )
+        return await self._scan_symbols(watchlist["day_trade_equities"], multiplier=5, timespan="minute", scan_label="day_trade")
 
     async def scan_swing_trade_candidates(self) -> List[Dict[str, Any]]:
         watchlist = await self.universe_filter.build_daily_watchlist()
-        return await self._scan_symbols(
-            watchlist["swing_trade_equities"],
-            multiplier=1,
-            timespan="day",
-            scan_label="swing_trade",
-        )
+        return await self._scan_symbols(watchlist["swing_trade_equities"], multiplier=1, timespan="day", scan_label="swing_trade")

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import List, Dict, Any
+from typing import Any, Dict, List
 
 import pandas as pd
 
@@ -27,6 +27,7 @@ class UniverseFilter:
         passed_swing = 0
         errors = 0
         rejected: Dict[str, str] = {}
+        metric_snapshot: Dict[str, Dict[str, float]] = {}
 
         for symbol in CORE_EQUITIES:
             try:
@@ -47,6 +48,13 @@ class UniverseFilter:
                 rejected[symbol] = "metric_calc_failed"
                 continue
 
+            metric_snapshot[symbol] = {
+                "price": round(metrics["price"], 2),
+                "relative_volume": round(metrics["relative_volume"], 2),
+                "atr_pct": round(metrics["atr_pct"] * 100, 2),
+                "gap_pct": round(metrics["gap_pct"] * 100, 2),
+            }
+
             if self._passes_settings(metrics, DAY_TRADE_SETTINGS):
                 day_trade_equities.append(symbol)
                 passed_day += 1
@@ -63,8 +71,15 @@ class UniverseFilter:
             "swing_trade_count": passed_swing,
             "errors": errors,
             "rejected_examples": dict(list(rejected.items())[:10]),
+            "metric_snapshot": dict(list(metric_snapshot.items())[:10]),
         }
-        logger.info("Universe filter complete. day=%s swing=%s fetched=%s errors=%s", passed_day, passed_swing, fetched, errors)
+        logger.info(
+            "Universe filter complete. day=%s swing=%s fetched=%s errors=%s",
+            passed_day,
+            passed_swing,
+            fetched,
+            errors,
+        )
         return {
             "day_trade_equities": sorted(set(day_trade_equities)),
             "swing_trade_equities": sorted(set(swing_trade_equities)),

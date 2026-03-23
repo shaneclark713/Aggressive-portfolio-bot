@@ -138,3 +138,12 @@ def format_catalyst_scan(summary: Mapping[str, Any]) -> str:
             "Catalysts": rows or ["No catalyst headlines loaded"],
         },
     )
+
+
+def format_tomorrow_plan(plan):
+    bullets = list(plan) if plan else []
+    if not bullets:
+        bullets = ["No clear bias yet. Stay selective and keep risk small."]
+
+    body = "\n".join(f"• {escape(str(item))}" for item in bullets)
+    return f"🧭 <b>Tomorrow Game Plan</b>\n\n{body}"

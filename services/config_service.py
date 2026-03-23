@@ -62,7 +62,10 @@ class ConfigService:
                 preset[category] = {}
             preset[category][field] = override_value
 
-        return {category: preset.get(category, {}) for category in self.VALID_FILTER_CATEGORIES}
+        return {
+            category: preset.get(category, {})
+            for category in self.VALID_FILTER_CATEGORIES
+        }
 
     def get_filter_category(self, category: str) -> Dict[str, Any]:
         category = category.lower()
@@ -119,6 +122,7 @@ class ConfigService:
 
     def _coerce_value(self, raw_value: str, current_value: Any) -> Any:
         raw = raw_value.strip()
+
         if isinstance(current_value, bool):
             lowered = raw.lower()
             if lowered in {"true", "1", "yes", "on"}:
@@ -126,12 +130,16 @@ class ConfigService:
             if lowered in {"false", "0", "no", "off"}:
                 return False
             raise ValueError("Expected boolean: true/false")
+
         if isinstance(current_value, int) and not isinstance(current_value, bool):
             return int(raw.replace(",", ""))
+
         if isinstance(current_value, float):
             return float(raw.replace(",", ""))
+
         if isinstance(current_value, list):
             return [item.strip() for item in raw.split(",") if item.strip()]
+
         return raw
 
     def _validate_filter_value(self, category: str, field: str, value: Any) -> None:
@@ -163,4 +171,4 @@ class ConfigService:
             raise ValueError(f"{field} must be non-negative")
 
         if field == "price_min" and value < 0:
-            raise ValueError("price_min must be non-negative")\n
+            raise ValueError("price_min must be non-negative")

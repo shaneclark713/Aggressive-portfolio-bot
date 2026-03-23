@@ -74,6 +74,9 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
             await update.message.reply_text("Unauthorized.")
             return
         scanner = app_services.get("scanner")
+        if scanner is None:
+            await update.message.reply_text("Scanner service not available.")
+            return
         await update.message.reply_text("Running market scan...")
         result = await scanner.scan_market_overview()
         await update.message.reply_text(
@@ -86,6 +89,9 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
             await update.message.reply_text("Unauthorized.")
             return
         scanner = app_services.get("scanner")
+        if scanner is None:
+            await update.message.reply_text("Scanner service not available.")
+            return
         await update.message.reply_text("Running news scan...")
         summary = await scanner.scan_news_overview()
         await update.message.reply_text(format_news_scan(summary), parse_mode="HTML")
@@ -95,6 +101,9 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
             await update.message.reply_text("Unauthorized.")
             return
         scanner = app_services.get("scanner")
+        if scanner is None:
+            await update.message.reply_text("Scanner service not available.")
+            return
         await update.message.reply_text("Running events scan...")
         summary = await scanner.scan_events_overview()
         await update.message.reply_text(format_event_scan(summary), parse_mode="HTML")
@@ -104,6 +113,9 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
             await update.message.reply_text("Unauthorized.")
             return
         scanner = app_services.get("scanner")
+        if scanner is None:
+            await update.message.reply_text("Scanner service not available.")
+            return
         await update.message.reply_text("Running catalyst scan...")
         summary = await scanner.scan_catalyst_overview()
         await update.message.reply_text(format_catalyst_scan(summary), parse_mode="HTML")
@@ -116,7 +128,10 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         if scanner is None:
             await update.message.reply_text("Scanner service not available.")
             return
-        await update.message.reply_text(format_scan_status(scanner.get_last_scan_stats()), parse_mode="HTML")
+        await update.message.reply_text(
+            format_scan_status(scanner.get_last_scan_stats()),
+            parse_mode="HTML",
+        )
 
     async def _pending_text(update, context):
         pending = context.user_data.get("pending_filter_edit")
@@ -126,17 +141,24 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
             await update.message.reply_text("Unauthorized.")
             context.user_data.pop("pending_filter_edit", None)
             return
+
         raw_value = (update.message.text or "").strip()
         category = pending["category"]
         field = pending["field"]
+
         try:
             new_value = config_service.set_filter_value(category, field, raw_value)
         except ValueError as exc:
-            await update.message.reply_text(f"Invalid value for {category}.{field}: {exc}\nSend a new value or /cancel.")
+            await update.message.reply_text(
+                f"Invalid value for {category}.{field}: {exc}\nSend a new value or /cancel."
+            )
             return
         except Exception as exc:
-            await update.message.reply_text(f"Could not update {category}.{field}: {exc}\nSend /cancel to exit.")
+            await update.message.reply_text(
+                f"Could not update {category}.{field}: {exc}\nSend /cancel to exit."
+            )
             return
+
         context.user_data.pop("pending_filter_edit", None)
         values = config_service.get_filter_fields(category)
         await update.message.reply_text(
@@ -147,39 +169,57 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
     async def _guarded_callback(update, context):
         query = update.callback_query
         await query.answer()
+
         if update.effective_chat.id != admin_chat_id:
             await query.answer("Unauthorized", show_alert=True)
             return
+
         data = query.data or ""
+
         if data.startswith(("a|", "p|", "r|")):
             await handle_trade_callback(update, context, app_services)
             return
+
         if data == "cp|back":
             context.user_data.pop("pending_filter_edit", None)
             await query.edit_message_text("Control Panel", reply_markup=build_control_panel_keyboard())
             return
+
         if data == "cp|presets":
             await query.edit_message_text(
                 f"Select Preset\nCurrent: {config_service.get_active_preset()}",
-                reply_markup=build_presets_keyboard(config_service.get_available_presets(), config_service.get_active_preset()),
+                reply_markup=build_presets_keyboard(
+                    config_service.get_available_presets(),
+                    config_service.get_active_preset(),
+                ),
             )
             return
+
         if data == "cp|mode":
             await query.edit_message_text(
                 f"Select Mode\nCurrent: {config_service.get_execution_mode()}",
                 reply_markup=build_mode_keyboard(config_service.get_execution_mode()),
             )
             return
+
         if data == "cp|strategies":
-            await query.edit_message_text("Strategies", reply_markup=build_strategies_keyboard(config_service.get_strategy_states()))
+            await query.edit_message_text(
+                "Strategies",
+                reply_markup=build_strategies_keyboard(config_service.get_strategy_states()),
+            )
             return
+
         if data == "cp|filters":
             filters_snapshot = config_service.resolve_filters()
             await query.edit_message_text(
                 "Choose a filter category to edit.",
-                reply_markup=build_filter_categories_keyboard(filters_snapshot, config_service.get_active_preset()),
+                reply_markup=build_filter_categories_keyboard(
+                    filters_snapshot,
+                    config_service.get_active_preset(),
+                ),
             )
             return
+
         if data.startswith("fcat|"):
             category = data.split("|", 1)[1].lower()
             if category not in VALID_FILTER_CATEGORIES:
@@ -192,6 +232,7 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
                 reply_markup=build_filter_fields_keyboard(category, values),
             )
             return
+
         if data.startswith("fedit|"):
             _, category, field = data.split("|", 2)
             category = category.lower()
@@ -199,17 +240,29 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
                 await query.answer("Invalid filter category.", show_alert=True)
                 return
             current_value = config_service.get_filter_value(category, field)
-            context.user_data["pending_filter_edit"] = {"category": category, "field": field}
-            await query.message.reply_text(f"Send new value for {category}.{field}\nCurrent: {current_value}\nUse /cancel to stop.")
+            context.user_data["pending_filter_edit"] = {
+                "category": category,
+                "field": field,
+            }
+            await query.message.reply_text(
+                f"Send new value for {category}.{field}\n"
+                f"Current: {current_value}\n"
+                f"Use /cancel to stop."
+            )
             return
+
         if data == "freset|all":
             config_service.reset_filter_overrides()
             context.user_data.pop("pending_filter_edit", None)
             await query.edit_message_text(
                 "All filter overrides cleared.",
-                reply_markup=build_filter_categories_keyboard(config_service.resolve_filters(), config_service.get_active_preset()),
+                reply_markup=build_filter_categories_keyboard(
+                    config_service.resolve_filters(),
+                    config_service.get_active_preset(),
+                ),
             )
             return
+
         if data.startswith("freset|"):
             category = data.split("|", 1)[1].lower()
             if category not in VALID_FILTER_CATEGORIES:
@@ -223,24 +276,40 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
                 reply_markup=build_filter_fields_keyboard(category, values),
             )
             return
+
         if data.startswith("set|preset|"):
             preset_name = data.split("|", 2)[2]
             config_service.set_active_preset(preset_name)
-            await query.edit_message_text(f"Preset updated to: {preset_name}", reply_markup=build_control_panel_keyboard())
+            await query.edit_message_text(
+                f"Preset updated to: {preset_name}",
+                reply_markup=build_control_panel_keyboard(),
+            )
             return
+
         if data.startswith("set|mode|"):
             mode = data.split("|", 2)[2]
             config_service.set_execution_mode(mode)
-            await query.edit_message_text(f"Execution mode updated to: {mode}", reply_markup=build_control_panel_keyboard())
+            await query.edit_message_text(
+                f"Execution mode updated to: {mode}",
+                reply_markup=build_control_panel_keyboard(),
+            )
             return
+
         if data.startswith("toggle|strategy|"):
             strategy_name = data.split("|", 2)[2]
             states = config_service.get_strategy_states()
             current = bool(states.get(strategy_name, True))
             config_service.settings_repo.set_strategy_state(strategy_name, not current)
-            await query.edit_message_text("Strategies updated", reply_markup=build_strategies_keyboard(config_service.get_strategy_states()))
+            await query.edit_message_text(
+                "Strategies updated",
+                reply_markup=build_strategies_keyboard(config_service.get_strategy_states()),
+            )
             return
-        await query.edit_message_text("Unknown control panel action.", reply_markup=build_control_panel_keyboard())
+
+        await query.edit_message_text(
+            "Unknown control panel action.",
+            reply_markup=build_control_panel_keyboard(),
+        )
 
     return [
         CommandHandler("start", start_command),
@@ -256,4 +325,4 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         CommandHandler("cancel", cancel_command),
         MessageHandler(filters.TEXT & ~filters.COMMAND, _pending_text),
         CallbackQueryHandler(_guarded_callback),
-    ]\n
+        ]

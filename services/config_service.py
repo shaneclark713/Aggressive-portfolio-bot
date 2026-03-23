@@ -12,14 +12,14 @@ class ConfigService:
     def __init__(self, settings_repo, settings):
         self.settings_repo = settings_repo
         self.settings = settings
-        self.default_execution_mode = getattr(settings, "bot_default_execution_mode", "alerts_only")
+        self.default_execution_mode = settings.bot_default_execution_mode
 
     def get_available_presets(self) -> List[str]:
         return list(FILTER_PRESETS.keys())
 
     def get_active_preset(self) -> str:
         preset = self.settings_repo.get_active_preset()
-        return preset if preset in FILTER_PRESETS else next(iter(FILTER_PRESETS.keys()))
+        return preset if preset in FILTER_PRESETS else "day_trade_momentum"
 
     def set_active_preset(self, preset_name: str) -> None:
         if preset_name not in FILTER_PRESETS:
@@ -138,9 +138,29 @@ class ConfigService:
         if field.endswith("_min") or field.endswith("_max"):
             if isinstance(value, (int, float)) and value < 0:
                 raise ValueError(f"{field} must be non-negative")
-        if field in {"price_max", "avg_daily_volume_min", "avg_dollar_volume_min", "relative_strength_lookback_minutes", "minimum_rr_ratio", "volume_vs_average_min_ratio"}:
-            if isinstance(value, (int, float)) and value <= 0:
-                raise ValueError(f"{field} must be greater than 0")
-        if field in {"atr_min_pct", "max_extension_from_ema9_pct", "premarket_gap_max_pct", "max_short_float_pct"}:
-            if isinstance(value, (int, float)) and value < 0:
-                raise ValueError(f"{field} must be non-negative")
+
+        positive_only = {
+            "price_max",
+            "avg_daily_volume_min",
+            "avg_dollar_volume_min",
+            "relative_strength_lookback_minutes",
+            "minimum_rr_ratio",
+            "volume_vs_average_min_ratio",
+            "max_float",
+            "min_premarket_vol",
+        }
+        if field in positive_only and isinstance(value, (int, float)) and value <= 0:
+            raise ValueError(f"{field} must be greater than 0")
+
+        percent_non_negative = {
+            "atr_min_pct",
+            "max_extension_from_ema9_pct",
+            "premarket_gap_max_pct",
+            "premarket_gap_min_percent",
+            "max_short_float_pct",
+        }
+        if field in percent_non_negative and isinstance(value, (int, float)) and value < 0:
+            raise ValueError(f"{field} must be non-negative")
+
+        if field == "price_min" and value < 0:
+            raise ValueError("price_min must be non-negative")\n

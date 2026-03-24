@@ -44,12 +44,18 @@ class ScannerService:
         top_symbols: List[str] = []
         error_examples: list[str] = []
         rate_limited = 0
+        heavy_rejections: list[str] = []
         scan_time = datetime.now(timezone.utc).isoformat()
         today = date.today().isoformat()
         start = (date.today() - timedelta(days=3)).isoformat()
 
         for index, symbol in enumerate(symbols):
             try:
+                heavy = await self.universe_filter.enrich_symbol_for_entry(symbol)
+                if not heavy.get("passes_heavy_filters", False):
+                    heavy_rejections.append(f"{symbol}: {heavy.get('rejection_reason', 'heavy_filter_failed')}")
+                    continue
+
                 df = await self.market_client.get_historical_data(
                     symbol=symbol,
                     multiplier=multiplier,
@@ -88,6 +94,9 @@ class ScannerService:
                 payload["scan_timestamp_utc"] = scan_time
                 payload["news_count"] = symbol_news_count
                 payload["catalyst_headlines"] = catalyst_headlines
+                payload["premarket_volume"] = heavy.get("premarket_volume", 0)
+                payload["premarket_gap_min_percent"] = heavy.get("premarket_gap_min_percent", 0)
+                payload["max_float"] = heavy.get("max_float")
                 candidates.append(payload)
 
                 qualified += 1
@@ -108,31 +117,33 @@ class ScannerService:
 
             finally:
                 if index < len(symbols) - 1:
-                    await asyncio.sleep(0.75)
+                    await asyncio.sleep(0.5)
 
+        watchlist_stats = self.universe_filter.get_last_watchlist_stats()
         self._last_scan_stats = {
             "scan_label": scan_label,
             "scan_timestamp_utc": scan_time,
-            "universe_loaded": len(symbols),
+            "universe_loaded": watchlist_stats.get("symbols_considered", len(symbols)),
             "passed_universe_filters": len(symbols),
             "evaluated": evaluated,
             "symbols_evaluated": evaluated,
             "qualified": qualified,
             "qualified_setups": qualified,
             "errors": errors,
-            "rate_limited": rate_limited,
+            "rate_limited": rate_limited + watchlist_stats.get("rate_limited", 0),
             "top_symbols": top_symbols[:10],
-            "error_examples": error_examples[:10],
+            "error_examples": (error_examples + heavy_rejections)[:10],
+            "lightweight_watchlist_count": len(symbols),
         }
 
         logger.info(
-            "Scan %s complete | universe=%s evaluated=%s setups=%s errors=%s rate_limited=%s",
+            "Scan %s complete | lightweight=%s evaluated=%s setups=%s errors=%s rate_limited=%s",
             scan_label,
             len(symbols),
             evaluated,
             qualified,
             errors,
-            rate_limited,
+            self._last_scan_stats["rate_limited"],
         )
 
         return candidates
@@ -224,7 +235,7 @@ class ScannerService:
                     }
                 )
 
-            await asyncio.sleep(0.35)
+            await asyncio.sleep(0.25)
 
         return {
             "symbols_checked": len(symbols),

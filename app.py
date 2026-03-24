@@ -1,7 +1,5 @@
 from __future__ import annotations
-
 import asyncio
-
 from config.settings import load_settings
 from config.logging_config import configure_logging
 from core.scheduler import build_scheduler, register_jobs
@@ -29,176 +27,36 @@ from services.midday_service import MiddayService
 from services.postmarket_service import PostmarketService
 from ledger.sheets_client import GoogleSheetsLedger
 
-
 async def main() -> None:
-    settings = load_settings()
-    configure_logging(settings.log_level, settings.storage_path)
-
-    run_migrations(settings.storage_path)
-    conn = connect_db(settings.storage_path)
-
-    trade_repo = TradeRepository(conn)
-    alert_repo = AlertRepository(conn)
-    execution_log_repo = ExecutionLogRepository(conn)
-    settings_repo = SettingsRepository(conn)
-
-    config_service = ConfigService(settings_repo, settings)
-    config_service.reset_execution_mode_on_boot()
-
-    market = PolygonMarketDataClient(settings.polygon_api_key)
-    news = FinnhubNewsClient(settings.finnhub_api_key)
-    econ = FinnhubEconomicCalendarClient(settings.finnhub_api_key)
-
-    await market.connect()
-    await news.connect()
-    await econ.connect()
-
-    router = StrategyRouter()
-    universe_filter = UniverseFilter(market)
-    scanner = ScannerService(market, universe_filter, router, news_client=news, econ_client=econ)
-
-    ibkr = IBKRClient(
-        getattr(settings, "ibkr_host", "127.0.0.1"),
-        getattr(settings, "ibkr_port", 7497),
-        getattr(settings, "ibkr_client_id", 1),
-        getattr(settings, "ibkr_account_id", ""),
-    )
-
-    tradovate = TradovateClient(
-        getattr(settings, "tradovate_base_url", ""),
-        getattr(settings, "tradovate_ws_url", ""),
-        getattr(settings, "tradovate_username", ""),
-        getattr(settings, "tradovate_password", ""),
-        getattr(settings, "tradovate_cid", ""),
-        getattr(settings, "tradovate_secret", ""),
-        getattr(settings, "tradovate_app_id", ""),
-        getattr(settings, "tradovate_app_version", ""),
-        getattr(settings, "tradovate_device_id", ""),
-        getattr(settings, "tradovate_account_id", ""),
-    )
-
-    alpaca = AlpacaClient(
-        api_key=getattr(settings, "alpaca_api_key", ""),
-        secret_key=getattr(settings, "alpaca_secret_key", ""),
-        base_url=getattr(settings, "alpaca_base_url", "https://paper-api.alpaca.markets"),
-    )
-
-    try:
-        await ibkr.connect()
-    except Exception:
-        pass
-
-    try:
-        await tradovate.connect()
-    except Exception:
-        pass
-
-    try:
-        await alpaca.connect()
-    except Exception:
-        pass
-
-    sheets = GoogleSheetsLedger(
-        settings.google_credentials_dict,
-        settings.google_spreadsheet_id,
-        settings.google_options_worksheet,
-        settings.google_futures_worksheet,
-        settings.google_monthly_summary_worksheet,
-    )
-    sheets.connect()
-
-    execution_router = ExecutionRouter(ibkr_client=ibkr, tradovate_client=tradovate, alpaca_client=alpaca)
-
-    watchlist_service = WatchlistService(universe_filter)
-    alert_service = AlertService(
-        alert_repo,
-        trade_repo,
-        execution_log_repo,
-        config_service,
-        settings,
-        execution_router=execution_router,
-    )
-    trade_review_service = TradeReviewService(trade_repo, settings)
-
-    app_services = {
-        "alert_repo": alert_repo,
-        "trade_repo": trade_repo,
-        "execution_log_repo": execution_log_repo,
-        "scanner": scanner,
-        "alert_service": alert_service,
-        "execution_router": execution_router,
-    }
-
-    telegram_app = build_telegram_app(
-        settings.telegram_bot_token,
-        app_services,
-        config_service,
-        settings.telegram_admin_chat_id,
-    )
-    telegram_app.bot_data["app_services"] = app_services
-
-    premarket = PremarketService(
-        telegram_app,
-        settings.telegram_admin_chat_id,
-        news,
-        econ,
-        watchlist_service,
-        scanner,
-        alert_service,
-        config_service,
-        alert_repo,
-    )
-
-    midday = MiddayService(
-        telegram_app,
-        settings.telegram_admin_chat_id,
-        news,
-        ibkr,
-        tradovate,
-        trade_repo,
-        trade_review_service,
-    )
-
-    postmarket = PostmarketService(
-        telegram_app,
-        settings.telegram_admin_chat_id,
-        news,
-        trade_repo,
-    )
-
-    scheduler = build_scheduler(settings.app_timezone)
-    register_jobs(
-        scheduler,
-        {
-            "premarket": premarket,
-            "midday": midday,
-            "postmarket": postmarket,
-        },
-        settings.app_timezone,
-    )
-
-    scheduler.start()
-    await telegram_app.initialize()
-    await telegram_app.start()
-    await telegram_app.updater.start_polling()
-
+    settings=load_settings(); configure_logging(settings.log_level, settings.storage_path); run_migrations(settings.storage_path); conn=connect_db(settings.storage_path)
+    trade_repo=TradeRepository(conn); alert_repo=AlertRepository(conn); execution_log_repo=ExecutionLogRepository(conn); settings_repo=SettingsRepository(conn)
+    config_service=ConfigService(settings_repo, settings); config_service.reset_execution_mode_on_boot()
+    market=PolygonMarketDataClient(settings.polygon_api_key); news=FinnhubNewsClient(settings.finnhub_api_key); econ=FinnhubEconomicCalendarClient(settings.finnhub_api_key)
+    await market.connect(); await news.connect(); await econ.connect()
+    router=StrategyRouter(); universe_filter=UniverseFilter(market, config_service); scanner=ScannerService(market, universe_filter, router, news_client=news, econ_client=econ)
+    ibkr=IBKRClient(getattr(settings,"ibkr_host","127.0.0.1"), getattr(settings,"ibkr_port",7497), getattr(settings,"ibkr_client_id",1), getattr(settings,"ibkr_account_id",""))
+    tradovate=TradovateClient(getattr(settings,"tradovate_base_url",""),getattr(settings,"tradovate_ws_url",""),getattr(settings,"tradovate_username",""),getattr(settings,"tradovate_password",""),getattr(settings,"tradovate_cid",""),getattr(settings,"tradovate_secret",""),getattr(settings,"tradovate_app_id",""),getattr(settings,"tradovate_app_version",""),getattr(settings,"tradovate_device_id",""),getattr(settings,"tradovate_account_id",""))
+    alpaca=AlpacaClient(api_key=getattr(settings,"alpaca_api_key",""), secret_key=getattr(settings,"alpaca_secret_key",""), base_url=getattr(settings,"alpaca_base_url","https://paper-api.alpaca.markets"))
+    for client in (ibkr, tradovate, alpaca):
+        try: await client.connect()
+        except Exception: pass
+    sheets=GoogleSheetsLedger(settings.google_credentials_dict, settings.google_spreadsheet_id, settings.google_options_worksheet, settings.google_futures_worksheet, settings.google_monthly_summary_worksheet); sheets.connect()
+    execution_router=ExecutionRouter(ibkr_client=ibkr, tradovate_client=tradovate, alpaca_client=alpaca)
+    watchlist_service=WatchlistService(universe_filter)
+    alert_service=AlertService(alert_repo, trade_repo, execution_log_repo, config_service, settings, execution_router=execution_router)
+    trade_review_service=TradeReviewService(trade_repo, settings)
+    app_services={"alert_repo":alert_repo,"trade_repo":trade_repo,"execution_log_repo":execution_log_repo,"scanner":scanner,"alert_service":alert_service,"execution_router":execution_router}
+    telegram_app=build_telegram_app(settings.telegram_bot_token, app_services, config_service, settings.telegram_admin_chat_id); telegram_app.bot_data["app_services"]=app_services
+    premarket=PremarketService(telegram_app, settings.telegram_admin_chat_id, news, econ, watchlist_service, scanner, alert_service, config_service, alert_repo)
+    midday=MiddayService(telegram_app, settings.telegram_admin_chat_id, news, ibkr, tradovate, trade_repo, trade_review_service)
+    postmarket=PostmarketService(telegram_app, settings.telegram_admin_chat_id, news, trade_repo)
+    scheduler=build_scheduler(settings.app_timezone); register_jobs(scheduler, {"premarket":premarket,"midday":midday,"postmarket":postmarket}, settings.app_timezone); scheduler.start()
+    await telegram_app.initialize(); await telegram_app.start(); await telegram_app.updater.start_polling()
     try:
         while True:
-            alert_service.expire_alerts()
-            await asyncio.sleep(30)
+            alert_service.expire_alerts(); await asyncio.sleep(30)
     finally:
-        await telegram_app.updater.stop()
-        await telegram_app.stop()
-        await telegram_app.shutdown()
-        scheduler.shutdown(wait=False)
-        await market.close()
-        await news.close()
-        await econ.close()
-        await ibkr.close()
-        await tradovate.close()
-        await alpaca.close()
-        conn.close()
+        await telegram_app.updater.stop(); await telegram_app.stop(); await telegram_app.shutdown(); scheduler.shutdown(wait=False)
+        await market.close(); await news.close(); await econ.close(); await ibkr.close(); await tradovate.close(); await alpaca.close(); conn.close()
 
-
-if __name__ == "__main__":
-    asyncio.run(main())
+if __name__ == "__main__": asyncio.run(main())

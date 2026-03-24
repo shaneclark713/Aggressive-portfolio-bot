@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 from datetime import date
+import logging
+
 import aiohttp
+
+
+logger = logging.getLogger("aggressive_portfolio_bot.data.econ_calendar")
 
 
 class FinnhubEconomicCalendarClient:
@@ -34,13 +39,33 @@ class FinnhubEconomicCalendarClient:
 
     async def fetch_events(self, day: date) -> list[dict]:
         assert self.session is not None and not self.session.closed
-        async with self.session.get(
-            self.base_url,
-            params={"from": day.isoformat(), "to": day.isoformat(), "token": self.api_key},
-        ) as response:
-            response.raise_for_status()
-            data = await response.json()
-            raw_events = data.get("economicCalendar", []) if isinstance(data, dict) else []
+
+        try:
+            async with self.session.get(
+                self.base_url,
+                params={
+                    "from": day.isoformat(),
+                    "to": day.isoformat(),
+                    "token": self.api_key,
+                },
+            ) as response:
+                if response.status in {401, 403, 429}:
+                    body = await response.text()
+                    logger.warning(
+                        "Finnhub economic calendar unavailable. status=%s body=%s",
+                        response.status,
+                        body[:300],
+                    )
+                    return []
+
+                response.raise_for_status()
+                data = await response.json()
+
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            logger.warning("Finnhub economic calendar request failed: %s", exc)
+            return []
+
+        raw_events = data.get("economicCalendar", []) if isinstance(data, dict) else []
 
         enriched = []
         for event in raw_events:
@@ -52,7 +77,12 @@ class FinnhubEconomicCalendarClient:
             enriched.append(item)
 
         impact_order = {"high": 0, "medium": 1, "low": 2, "unknown": 3}
-        enriched.sort(key=lambda x: (impact_order.get(x.get("impact_label", "unknown"), 9), x.get("event_time", "ZZZ")))
+        enriched.sort(
+            key=lambda x: (
+                impact_order.get(x.get("impact_label", "unknown"), 9),
+                x.get("event_time", "ZZZ"),
+            )
+        )
         return enriched
 
     def summarize_events(self, events: list[dict], limit: int = 8) -> list[str]:

@@ -20,10 +20,22 @@ class DiscoveryService:
         "swing": "overnight",
     }
 
-    def __init__(self, market_client, config_service, storage_path: Path):
+    def __init__(self, market_client, config_service, storage_path: Path | str):
         self.market_client = market_client
         self.config_service = config_service
-        self.snapshot_dir = Path(storage_path) / "snapshot"
+
+        base_path = Path(storage_path)
+
+        # If storage_path points to a file like storage/app.db, use its parent.
+        # If it points to a directory like storage, use it directly.
+        storage_root = base_path.parent if base_path.suffix else base_path
+
+        self.snapshot_dir = storage_root / "snapshots"
+
+        # Guard against a file existing where we need a directory.
+        if self.snapshot_dir.exists() and self.snapshot_dir.is_file():
+            self.snapshot_dir.unlink()
+
         self.snapshot_dir.mkdir(parents=True, exist_ok=True)
         self._last_status: Dict[str, Dict[str, Any]] = {}
 

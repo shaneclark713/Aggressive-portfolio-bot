@@ -197,3 +197,9 @@ class PolygonMarketDataClient:
             "premarket_volume": premarket_volume,
             "premarket_gap_min_percent": gap_pct,
         }
+    async def get_full_market_snapshot(self) -> list[dict]:
+        endpoint = f"{self.base_url}/v2/snapshot/locale/us/markets/stocks/tickers"
+        data = await self._request_json(endpoint, params={"apiKey": self.api_key})
+        tickers = data.get("tickers", []) if isinstance(data, dict) else []
+        return tickers if isinstance(tickers, list) else []
+

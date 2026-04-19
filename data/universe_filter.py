@@ -49,29 +49,20 @@ class UniverseFilter:
         filters = self._filters_for_scan(scan_type)
         descriptive = filters["descriptive"]
         technical = filters["technical"]
-
         candidate_rows = await self.discovery_service.get_candidate_rows(scan_type, force_refresh=force_refresh)
         discovery_count = len(candidate_rows)
-        shortlisted: List[str] = []
-        swing_trade_equities: List[str] = []
-        fetched = 0
-        passed_day = 0
-        passed_swing = 0
-        errors = 0
-        rate_limited = 0
-        rejected: Dict[str, str] = {}
-        metric_snapshot: Dict[str, Dict[str, float]] = {}
-
+        shortlisted = []
+        swing_trade_equities = []
+        fetched = passed_day = passed_swing = errors = rate_limited = 0
+        rejected = {}
+        metric_snapshot = {}
+        self._last_passers = []
         shortlist_cap = int(descriptive.get("shortlist_cap", 8) or 8)
 
         for row in candidate_rows:
             symbol = row["symbol"]
             try:
-                daily_df = await self.market_client.get_historical_data(
-                    symbol=symbol,
-                    multiplier=1,
-                    timespan="day",
-                )
+                daily_df = await self.market_client.get_historical_data(symbol=symbol, multiplier=1, timespan="day")
             except Exception as exc:
                 errors += 1
                 if "rate_limited" in str(exc).lower() or "429" in str(exc):
@@ -79,17 +70,14 @@ class UniverseFilter:
                 rejected[symbol] = f"fetch_error: {exc}"
                 logger.warning("[%s] Dynamic universe fetch failed: %s", symbol, exc)
                 continue
-
             if daily_df.empty or len(daily_df) < 20:
                 rejected[symbol] = "insufficient_daily_data"
                 continue
-
             fetched += 1
             metrics = self._compute_metrics(daily_df, symbol)
             if not metrics:
                 rejected[symbol] = "metric_calc_failed"
                 continue
-
             metric_snapshot[symbol] = {
                 "price": round(metrics["price"], 2),
                 "relative_volume": round(metrics["relative_volume"], 2),
@@ -97,23 +85,19 @@ class UniverseFilter:
                 "gap_pct": round(metrics["gap_pct"] * 100, 2),
                 "day_dollar_volume": round(row.get("day_dollar_volume", 0), 2),
             }
-
             if self._passes_lightweight_filters(metrics, descriptive, technical):
                 shortlisted.append(symbol)
                 passed_day += 1
                 self._last_passers.append({"symbol": symbol, **metric_snapshot[symbol]})
             else:
                 rejected[symbol] = "failed_lightweight_thresholds"
-
             if self._passes_lightweight_filters(metrics, descriptive, technical, swing=True):
                 swing_trade_equities.append(symbol)
                 passed_swing += 1
-
             if len(shortlisted) >= shortlist_cap:
                 break
 
         swing_trade_equities = swing_trade_equities[: max(6, min(shortlist_cap, len(swing_trade_equities)))]
-
         self._last_watchlist_stats = {
             "scan_type": scan_type,
             "profile": profile,
@@ -129,36 +113,16 @@ class UniverseFilter:
             "metric_snapshot": dict(list(metric_snapshot.items())[:10]),
             "source": "dynamic_market_snapshot",
         }
-
-        return {
-            "day_trade_equities": sorted(set(shortlisted)),
-            "swing_trade_equities": sorted(set(swing_trade_equities)),
-            "futures": CORE_FUTURES,
-        }
+        return {"day_trade_equities": sorted(set(shortlisted)), "swing_trade_equities": sorted(set(swing_trade_equities)), "futures": CORE_FUTURES}
 
     async def enrich_symbol_for_entry(self, symbol: str, scan_type: str = "market") -> Dict[str, Any]:
         descriptive = self._filters_for_scan(scan_type)["descriptive"]
-        result = {
-            "symbol": symbol,
-            "scan_type": scan_type,
-            "passes_heavy_filters": True,
-            "rejection_reason": None,
-            "max_float": None,
-            "premarket_volume": 0.0,
-            "premarket_gap_min_percent": 0.0,
-            "premarket_data_unavailable": False,
-        }
-
+        result = {"symbol": symbol, "scan_type": scan_type, "passes_heavy_filters": True, "rejection_reason": None, "max_float": None, "premarket_volume": 0.0, "premarket_gap_min_percent": 0.0, "premarket_data_unavailable": False}
         try:
             details = await self.market_client.get_ticker_details(symbol)
         except Exception:
             details = {}
-
-        float_value = (
-            details.get("weighted_shares_outstanding")
-            or details.get("share_class_shares_outstanding")
-            or details.get("market_cap_float")
-        )
+        float_value = details.get("weighted_shares_outstanding") or details.get("share_class_shares_outstanding") or details.get("market_cap_float")
         result["max_float"] = float(float_value) if float_value not in (None, "") else None
         max_float_limit = descriptive.get("max_float")
         if max_float_limit and result["max_float"] is not None and result["max_float"] > max_float_limit:
@@ -166,7 +130,6 @@ class UniverseFilter:
             result["rejection_reason"] = "max_float"
             self._last_shortlist_metrics[symbol] = result
             return result
-
         if scan_type == "premarket":
             try:
                 premarket = await self.market_client.get_premarket_snapshot(symbol)
@@ -178,14 +141,12 @@ class UniverseFilter:
                 result["premarket_data_unavailable"] = True
                 self._last_shortlist_metrics[symbol] = result
                 return result
-
             if result["premarket_volume"] < descriptive.get("min_premarket_vol", 0):
                 result["passes_heavy_filters"] = False
                 result["rejection_reason"] = "premarket_volume"
             elif result["premarket_gap_min_percent"] < descriptive.get("premarket_gap_min_percent", 0):
                 result["passes_heavy_filters"] = False
                 result["rejection_reason"] = "premarket_gap_min_percent"
-
         self._last_shortlist_metrics[symbol] = result
         return result
 
@@ -205,23 +166,9 @@ class UniverseFilter:
         prior_close = float(work_df["close"].iloc[-2]) if len(work_df) >= 2 else float(latest["close"])
         gap_pct = abs(float(latest["open"] - prior_close) / prior_close) if prior_close else 0.0
         rel = float(latest["volume"] / avg_volume) if avg_volume else 0.0
-        return {
-            "symbol": symbol,
-            "price": float(latest["close"]),
-            "avg_daily_volume": avg_volume,
-            "avg_dollar_volume": avg_dollar,
-            "relative_volume": rel,
-            "atr_pct": atr_pct,
-            "gap_pct": gap_pct,
-        }
+        return {"symbol": symbol, "price": float(latest["close"]), "avg_daily_volume": avg_volume, "avg_dollar_volume": avg_dollar, "relative_volume": rel, "atr_pct": atr_pct, "gap_pct": gap_pct}
 
-    def _passes_lightweight_filters(
-        self,
-        metrics: Dict[str, Any],
-        descriptive: Dict[str, Any],
-        technical: Dict[str, Any],
-        swing: bool = False,
-    ) -> bool:
+    def _passes_lightweight_filters(self, metrics: Dict[str, Any], descriptive: Dict[str, Any], technical: Dict[str, Any], swing: bool = False) -> bool:
         max_gap_pct = float(technical.get("premarket_gap_max_pct", 12.0)) / 100.0
         return (
             metrics["price"] >= float(descriptive.get("price_min", 0))

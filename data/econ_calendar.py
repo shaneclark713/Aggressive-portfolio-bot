@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from datetime import date
+import asyncio
 import logging
+from datetime import date
 
 import aiohttp
-
 
 logger = logging.getLogger("aggressive_portfolio_bot.data.econ_calendar")
 
@@ -13,7 +13,7 @@ class FinnhubEconomicCalendarClient:
     def __init__(self, api_key: str):
         self.api_key = api_key
         self.base_url = "https://finnhub.io/api/v1/calendar/economic"
-        self.session = None
+        self.session: aiohttp.ClientSession | None = None
         self.timeout = aiohttp.ClientTimeout(total=15)
 
     async def connect(self):
@@ -24,6 +24,9 @@ class FinnhubEconomicCalendarClient:
         if self.session and not self.session.closed:
             await self.session.close()
         self.session = None
+
+    def _ready(self) -> bool:
+        return self.session is not None and not self.session.closed
 
     def _impact_label(self, raw_impact) -> str:
         if raw_impact is None:
@@ -38,35 +41,24 @@ class FinnhubEconomicCalendarClient:
         return text
 
     async def fetch_events(self, day: date) -> list[dict]:
-        assert self.session is not None and not self.session.closed
-
+        if not self._ready():
+            raise RuntimeError("Finnhub economic calendar session not connected")
         try:
             async with self.session.get(
                 self.base_url,
-                params={
-                    "from": day.isoformat(),
-                    "to": day.isoformat(),
-                    "token": self.api_key,
-                },
+                params={"from": day.isoformat(), "to": day.isoformat(), "token": self.api_key},
             ) as response:
                 if response.status in {401, 403, 429}:
                     body = await response.text()
-                    logger.warning(
-                        "Finnhub economic calendar unavailable. status=%s body=%s",
-                        response.status,
-                        body[:300],
-                    )
+                    logger.warning("Finnhub economic calendar unavailable. status=%s body=%s", response.status, body[:300])
                     return []
-
                 response.raise_for_status()
                 data = await response.json()
-
         except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
             logger.warning("Finnhub economic calendar request failed: %s", exc)
             return []
 
         raw_events = data.get("economicCalendar", []) if isinstance(data, dict) else []
-
         enriched = []
         for event in raw_events:
             item = dict(event)
@@ -75,14 +67,8 @@ class FinnhubEconomicCalendarClient:
             item["event_time"] = item.get("time") or item.get("hour") or "TBD"
             item["country"] = item.get("country") or "US"
             enriched.append(item)
-
         impact_order = {"high": 0, "medium": 1, "low": 2, "unknown": 3}
-        enriched.sort(
-            key=lambda x: (
-                impact_order.get(x.get("impact_label", "unknown"), 9),
-                x.get("event_time", "ZZZ"),
-            )
-        )
+        enriched.sort(key=lambda x: (impact_order.get(x.get("impact_label", "unknown"), 9), x.get("event_time", "ZZZ")))
         return enriched
 
     def summarize_events(self, events: list[dict], limit: int = 8) -> list[str]:

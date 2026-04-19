@@ -47,6 +47,7 @@ async def main() -> None:
     market = PolygonMarketDataClient(settings.polygon_api_key)
     news = FinnhubNewsClient(settings.finnhub_api_key)
     econ = FinnhubEconomicCalendarClient(settings.finnhub_api_key)
+
     await market.connect()
     await news.connect()
     await econ.connect()
@@ -54,7 +55,13 @@ async def main() -> None:
     router = StrategyRouter()
     discovery_service = DiscoveryService(market, config_service, settings.storage_path)
     universe_filter = UniverseFilter(market, config_service, discovery_service)
-    scanner = ScannerService(market, universe_filter, router, news_client=news, econ_client=econ)
+    scanner = ScannerService(
+        market,
+        universe_filter,
+        router,
+        news_client=news,
+        econ_client=econ,
+    )
 
     alpaca = AlpacaClient(
         api_key=getattr(settings, "alpaca_api_key", ""),
@@ -70,7 +77,8 @@ async def main() -> None:
 
     for client in (alpaca, tradier):
         try:
-            await client.connect()
+            if hasattr(client, "connect"):
+                await client.connect()
         except Exception:
             pass
 
@@ -83,7 +91,11 @@ async def main() -> None:
     )
     sheets.connect()
 
-    execution_router = ExecutionRouter(alpaca_client=alpaca, tradier_client=tradier)
+    execution_router = ExecutionRouter(
+        alpaca_client=alpaca,
+        tradier_client=tradier,
+        config_service=config_service,
+    )
 
     watchlist_service = WatchlistService(universe_filter)
     alert_service = AlertService(
@@ -126,6 +138,7 @@ async def main() -> None:
         config_service,
         alert_repo,
     )
+
     midday = MiddayService(
         telegram_app,
         settings.telegram_admin_chat_id,
@@ -135,6 +148,7 @@ async def main() -> None:
         trade_repo,
         trade_review_service,
     )
+
     postmarket = PostmarketService(
         telegram_app,
         settings.telegram_admin_chat_id,
@@ -145,7 +159,11 @@ async def main() -> None:
     scheduler = build_scheduler(settings.app_timezone)
     register_jobs(
         scheduler,
-        {"premarket": premarket, "midday": midday, "postmarket": postmarket},
+        {
+            "premarket": premarket,
+            "midday": midday,
+            "postmarket": postmarket,
+        },
         settings.app_timezone,
     )
     scheduler.start()
@@ -166,8 +184,14 @@ async def main() -> None:
         await market.close()
         await news.close()
         await econ.close()
-        await alpaca.close()
-        await tradier.close()
+
+        for client in (alpaca, tradier):
+            try:
+                if hasattr(client, "close"):
+                    await client.close()
+            except Exception:
+                pass
+
         conn.close()
 
 

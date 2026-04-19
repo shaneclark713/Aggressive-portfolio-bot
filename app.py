@@ -15,9 +15,8 @@ from data.econ_calendar import FinnhubEconomicCalendarClient
 from data.universe_filter import UniverseFilter
 from data.scanners import ScannerService
 from strategies.router import StrategyRouter
-from brokers.ibkr import IBKRClient
-from brokers.tradovate import TradovateClient
 from brokers.alpaca import AlpacaClient
+from brokers.tradier import TradierClient
 from brokers.execution_router import ExecutionRouter
 from telegram_bot.bot import build_telegram_app
 from services.config_service import ConfigService
@@ -57,22 +56,44 @@ async def main() -> None:
     universe_filter = UniverseFilter(market, config_service, discovery_service)
     scanner = ScannerService(market, universe_filter, router, news_client=news, econ_client=econ)
 
-    ibkr = IBKRClient(getattr(settings, "ibkr_host", "127.0.0.1"), getattr(settings, "ibkr_port", 7497), getattr(settings, "ibkr_client_id", 1), getattr(settings, "ibkr_account_id", ""))
-    tradovate = TradovateClient(getattr(settings, "tradovate_base_url", ""), getattr(settings, "tradovate_ws_url", ""), getattr(settings, "tradovate_username", ""), getattr(settings, "tradovate_password", ""), getattr(settings, "tradovate_cid", ""), getattr(settings, "tradovate_secret", ""), getattr(settings, "tradovate_app_id", ""), getattr(settings, "tradovate_app_version", ""), getattr(settings, "tradovate_device_id", ""), getattr(settings, "tradovate_account_id", ""))
-    alpaca = AlpacaClient(api_key=getattr(settings, "alpaca_api_key", ""), secret_key=getattr(settings, "alpaca_secret_key", ""), base_url=getattr(settings, "alpaca_base_url", "https://paper-api.alpaca.markets"))
+    alpaca = AlpacaClient(
+        api_key=getattr(settings, "alpaca_api_key", ""),
+        secret_key=getattr(settings, "alpaca_secret_key", ""),
+        base_url=getattr(settings, "alpaca_base_url", "https://paper-api.alpaca.markets"),
+    )
 
-    for client in (ibkr, tradovate, alpaca):
+    tradier = TradierClient(
+        token=getattr(settings, "tradier_access_token", ""),
+        account_id=getattr(settings, "tradier_account_id", ""),
+        base_url=getattr(settings, "tradier_base_url", "https://api.tradier.com/v1"),
+    )
+
+    for client in (alpaca, tradier):
         try:
             await client.connect()
         except Exception:
             pass
 
-    sheets = GoogleSheetsLedger(settings.google_credentials_dict, settings.google_spreadsheet_id, settings.google_options_worksheet, settings.google_futures_worksheet, settings.google_monthly_summary_worksheet)
+    sheets = GoogleSheetsLedger(
+        settings.google_credentials_dict,
+        settings.google_spreadsheet_id,
+        settings.google_options_worksheet,
+        settings.google_futures_worksheet,
+        settings.google_monthly_summary_worksheet,
+    )
     sheets.connect()
-    execution_router = ExecutionRouter(ibkr_client=ibkr, tradovate_client=tradovate, alpaca_client=alpaca)
+
+    execution_router = ExecutionRouter(alpaca_client=alpaca, tradier_client=tradier)
 
     watchlist_service = WatchlistService(universe_filter)
-    alert_service = AlertService(alert_repo, trade_repo, execution_log_repo, config_service, settings, execution_router=execution_router)
+    alert_service = AlertService(
+        alert_repo,
+        trade_repo,
+        execution_log_repo,
+        config_service,
+        settings,
+        execution_router=execution_router,
+    )
     trade_review_service = TradeReviewService(trade_repo, settings)
 
     app_services = {
@@ -86,15 +107,47 @@ async def main() -> None:
         "universe_filter": universe_filter,
     }
 
-    telegram_app = build_telegram_app(settings.telegram_bot_token, app_services, config_service, settings.telegram_admin_chat_id)
+    telegram_app = build_telegram_app(
+        settings.telegram_bot_token,
+        app_services,
+        config_service,
+        settings.telegram_admin_chat_id,
+    )
     telegram_app.bot_data["app_services"] = app_services
 
-    premarket = PremarketService(telegram_app, settings.telegram_admin_chat_id, news, econ, watchlist_service, scanner, alert_service, config_service, alert_repo)
-    midday = MiddayService(telegram_app, settings.telegram_admin_chat_id, news, ibkr, tradovate, trade_repo, trade_review_service)
-    postmarket = PostmarketService(telegram_app, settings.telegram_admin_chat_id, news, trade_repo)
+    premarket = PremarketService(
+        telegram_app,
+        settings.telegram_admin_chat_id,
+        news,
+        econ,
+        watchlist_service,
+        scanner,
+        alert_service,
+        config_service,
+        alert_repo,
+    )
+    midday = MiddayService(
+        telegram_app,
+        settings.telegram_admin_chat_id,
+        news,
+        None,
+        None,
+        trade_repo,
+        trade_review_service,
+    )
+    postmarket = PostmarketService(
+        telegram_app,
+        settings.telegram_admin_chat_id,
+        news,
+        trade_repo,
+    )
 
     scheduler = build_scheduler(settings.app_timezone)
-    register_jobs(scheduler, {"premarket": premarket, "midday": midday, "postmarket": postmarket}, settings.app_timezone)
+    register_jobs(
+        scheduler,
+        {"premarket": premarket, "midday": midday, "postmarket": postmarket},
+        settings.app_timezone,
+    )
     scheduler.start()
 
     await telegram_app.initialize()
@@ -113,9 +166,8 @@ async def main() -> None:
         await market.close()
         await news.close()
         await econ.close()
-        await ibkr.close()
-        await tradovate.close()
         await alpaca.close()
+        await tradier.close()
         conn.close()
 
 

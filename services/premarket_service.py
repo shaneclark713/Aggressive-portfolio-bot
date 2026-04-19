@@ -36,6 +36,7 @@ class PremarketService:
 
     async def run(self):
         today_ny = datetime.now(ZoneInfo("America/New_York")).date()
+
         try:
             econ_events = await self.econ_client.fetch_events(today_ny)
             econ_status = "loaded"
@@ -43,6 +44,7 @@ class PremarketService:
             econ_events = []
             econ_status = "unavailable"
             logger.warning("Premarket econ calendar unavailable: %s", exc)
+
         try:
             headlines = await self.news_client.fetch_market_news()
             news_status = "loaded"
@@ -50,6 +52,7 @@ class PremarketService:
             headlines = []
             news_status = "unavailable"
             logger.warning("Premarket news feed unavailable: %s", exc)
+
         sentiment = analyze_sentiment(headlines) if headlines else {"sentiment": "NEUTRAL", "score": 0}
 
         try:
@@ -65,7 +68,7 @@ class PremarketService:
 
         try:
             premarket_result = await self.scanner_service.scan_premarket_overview()
-            day_candidates = premarket_result["candidates"]
+            day_candidates = premarket_result.get("candidates", [])
         except Exception as exc:
             logger.exception("Premarket scan failed: %s", exc)
             premarket_result = {"stats": {}, "candidates": []}
@@ -73,6 +76,7 @@ class PremarketService:
 
         scan_stats = premarket_result.get("stats", {})
         high_impact = [event for event in econ_events if event.get("impact_label") == "high"]
+
         sections = {
             "Configuration": [
                 f"Overall preset: {self.config_service.get_active_preset()}",
@@ -99,15 +103,37 @@ class PremarketService:
                 f"Errors: {scan_stats.get('errors', 0)}",
             ],
         }
-        await self.telegram_app.bot.send_message(chat_id=self.chat_id, text=format_daily_report("🌅 5:30 AM Pre-Market Report", sections), parse_mode="HTML")
-        await self.telegram_app.bot.send_message(chat_id=self.chat_id, text=format_scan_status(scan_stats), parse_mode="HTML")
+
+        await self.telegram_app.bot.send_message(
+            chat_id=self.chat_id,
+            text=format_daily_report("🌅 5:30 AM Pre-Market Report", sections),
+            parse_mode="HTML",
+        )
+        await self.telegram_app.bot.send_message(
+            chat_id=self.chat_id,
+            text=format_scan_status(scan_stats),
+            parse_mode="HTML",
+        )
 
         for payload in day_candidates:
             try:
-                trade_id = await self.alert_service.create_trade_candidate(payload, broker="ALPACA", instrument_type="stock")
+                trade_id = self.alert_service.create_trade_candidate(
+                    payload,
+                    broker="ALPACA",
+                    instrument_type="stock",
+                )
                 text = format_trade_alert({**payload, "trade_id": trade_id})
-                msg = await self.telegram_app.bot.send_message(chat_id=self.chat_id, text=text, reply_markup=build_trade_keyboard(trade_id), parse_mode="HTML")
+                msg = await self.telegram_app.bot.send_message(
+                    chat_id=self.chat_id,
+                    text=text,
+                    reply_markup=build_trade_keyboard(trade_id),
+                    parse_mode="HTML",
+                )
                 if hasattr(self.alert_repo, "set_message_id"):
                     self.alert_repo.set_message_id(trade_id, msg.message_id)
             except Exception as exc:
-                logger.exception("Failed to send/store premarket trade candidate for %s: %s", payload.get("symbol", "UNKNOWN"), exc)
+                logger.exception(
+                    "Failed to send/store premarket trade candidate for %s: %s",
+                    payload.get("symbol", "UNKNOWN"),
+                    exc,
+                )

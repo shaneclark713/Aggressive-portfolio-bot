@@ -25,14 +25,9 @@ class DiscoveryService:
         self.config_service = config_service
 
         base_path = Path(storage_path)
-
-        # If storage_path points to a file like storage/app.db, use its parent.
-        # If it points to a directory like storage, use it directly.
-        storage_root = base_path.parent if base_path.suffix else base_path
-
+        storage_root = base_path if base_path.suffix == "" else base_path.parent
         self.snapshot_dir = storage_root / "snapshots"
 
-        # Guard against a file existing where we need a directory.
         if self.snapshot_dir.exists() and self.snapshot_dir.is_file():
             self.snapshot_dir.unlink()
 
@@ -92,7 +87,7 @@ class DiscoveryService:
         last_trade = item.get("lastTrade") or {}
         last_quote = item.get("lastQuote") or {}
 
-        price = last_trade.get("p") or day.get("c") or item.get("todaysChange") or prev_day.get("c")
+        price = last_trade.get("p") or day.get("c") or prev_day.get("c")
         if price in (None, ""):
             return None
 
@@ -104,19 +99,21 @@ class DiscoveryService:
         volume = float(day.get("v") or 0)
         prev_close = float(prev_day.get("c") or 0)
         day_open = float(day.get("o") or 0)
-        day_high = float(day.get("h") or 0)
-        day_low = float(day.get("l") or 0)
         todays_change_pct = item.get("todaysChangePerc")
         try:
             change_pct = float(todays_change_pct) if todays_change_pct is not None else 0.0
         except Exception:
             change_pct = 0.0
+
         if change_pct == 0.0 and prev_close:
             change_pct = ((price - prev_close) / prev_close) * 100.0
 
         gap_pct = 0.0
         if prev_close and day_open:
             gap_pct = abs((day_open - prev_close) / prev_close) * 100.0
+
+        bid = float(last_quote.get("P") or 0)
+        ask = float(last_quote.get("p") or 0)
 
         return {
             "symbol": symbol,
@@ -127,16 +124,16 @@ class DiscoveryService:
             "gap_pct": gap_pct,
             "prev_close": prev_close,
             "day_open": day_open,
-            "day_high": day_high,
-            "day_low": day_low,
-            "bid": float(last_quote.get("P") or 0),
-            "ask": float(last_quote.get("p") or 0),
+            "bid": bid,
+            "ask": ask,
+            "spread_pct": abs(ask - bid) / price if price and bid and ask else 0.0,
         }
 
     async def build_snapshot(self, profile: str) -> Dict[str, Any]:
         raw = await self.market_client.get_full_market_snapshot()
         rows: List[Dict[str, Any]] = []
         skipped = 0
+
         for item in raw:
             parsed = self._parse_snapshot_row(item)
             if parsed is None:
@@ -188,6 +185,7 @@ class DiscoveryService:
         filters = self._filters_for_profile(profile)
         descriptive = filters["descriptive"]
         technical = filters["technical"]
+
         shortlist_cap = int(descriptive.get("shortlist_cap", 8) or 8)
         discovery_cap = max(shortlist_cap * 6, 30)
 

@@ -19,9 +19,9 @@ class MarketRegimeClassifier:
         if adx_value.empty:
             return "UNKNOWN"
 
-        close = work["close"].iloc[-1]
-        ema9 = ema(work["close"], 9).iloc[-1]
-        sma21 = sma(work["close"], 21).iloc[-1]
+        close = float(work["close"].iloc[-1])
+        ema9 = float(ema(work["close"], 9).iloc[-1])
+        sma21 = float(sma(work["close"], 21).iloc[-1])
         regime_adx = float(adx_value.iloc[-1])
 
         if regime_adx >= 25 and close > ema9 > sma21:

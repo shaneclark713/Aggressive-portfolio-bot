@@ -66,7 +66,6 @@ class StrategyRouter:
         for strategy_name, strategy in self.strategies:
             if not self._is_enabled(strategy_name):
                 continue
-
             result = strategy.analyze(work_df, symbol)
             signal = result.get("signal", "WAIT")
             if signal.startswith("LONG_") or signal.startswith("SHORT_"):
@@ -110,13 +109,12 @@ class StrategyRouter:
         confidence = int(selected_setup.get("confidence", 0))
         metrics = dict(selected_setup.get("metrics", {}))
 
-        move_5 = percent_change(work_df["close"], periods=min(5, len(work_df)-1)).iloc[-1]
-        volume_ratio = float(work_df["volume"].iloc[-1] / work_df["volume"].tail(20).mean())
+        move_5 = percent_change(work_df["close"], periods=min(5, len(work_df) - 1)).iloc[-1]
+        volume_ratio_now = float(work_df["volume"].iloc[-1] / work_df["volume"].tail(20).mean())
 
-        targets = [
-            round(float(risk_data["take_profit"]), 2),
-            round(float(entry_price + (float(risk_data["reward"]) * 1.5)) if side == "LONG" else float(entry_price - (float(risk_data["reward"]) * 1.5)), 2),
-        ]
+        reward = float(risk_data["reward"])
+        second_target = entry_price + (reward * 1.5) if side == "LONG" else entry_price - (reward * 1.5)
+        targets = [round(float(risk_data["take_profit"]), 2), round(float(second_target), 2)]
 
         payload = {
             "symbol": symbol,
@@ -136,16 +134,12 @@ class StrategyRouter:
             "rr_ratio": round(float(risk_data["actual_rr"]), 2),
             "confidence": confidence,
             "trigger_reasons": trigger_reasons,
-            "filter_pass_summary": {
-                "kill_switch": True,
-                "risk_engine": True,
-                "strategy_enabled": True,
-            },
+            "filter_pass_summary": {"kill_switch": True, "risk_engine": True, "strategy_enabled": True},
             "metrics": {
                 **metrics,
                 "atr_14": round(atr_value, 2),
                 "atr_pct": round((atr_value / entry_price) * 100, 2),
-                "volume_ratio": round(volume_ratio, 2),
+                "volume_ratio": round(volume_ratio_now, 2),
                 "move_last_window_pct": round(float(move_5), 2),
             },
             "notes": selected_setup.get("metadata", {}),

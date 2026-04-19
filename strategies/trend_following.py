@@ -27,7 +27,7 @@ class TrendFollowingStrategy(BaseStrategy):
         ema9 = ema(clean["close"], 9)
         sma21 = sma(clean["close"], 21)
         adx14 = adx(clean[["high", "low", "close"]], 14)
-        vol_ratio = clean["volume"].iloc[-1] / clean["volume"].tail(20).mean()
+        vol_ratio = float(clean["volume"].iloc[-1] / clean["volume"].tail(20).mean())
 
         latest_close = float(clean["close"].iloc[-1])
         latest_ema9 = float(ema9.iloc[-1])
@@ -66,6 +66,6 @@ class TrendFollowingStrategy(BaseStrategy):
                 "ema_9": round(latest_ema9, 2),
                 "sma_21": round(latest_sma21, 2),
                 "adx_14": round(latest_adx, 2),
-                "volume_ratio": round(float(vol_ratio), 2),
+                "volume_ratio": round(vol_ratio, 2),
             },
         ).as_dict()

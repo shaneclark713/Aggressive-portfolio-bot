@@ -37,17 +37,22 @@ def rsi(close: pd.Series, length: int = 14) -> pd.Series:
 def adx(df: pd.DataFrame, length: int = 14) -> pd.Series:
     high = df["high"]
     low = df["low"]
-    close = df["close"]
     up_move = high.diff()
     down_move = -low.diff()
 
     plus_dm = pd.Series(
-        [up if pd.notna(up) and pd.notna(down) and up > down and up > 0 else 0.0 for up, down in zip(up_move, down_move)],
+        [
+            up if pd.notna(up) and pd.notna(down) and up > down and up > 0 else 0.0
+            for up, down in zip(up_move, down_move)
+        ],
         index=df.index,
         dtype="float64",
     )
     minus_dm = pd.Series(
-        [down if pd.notna(up) and pd.notna(down) and down > up and down > 0 else 0.0 for up, down in zip(up_move, down_move)],
+        [
+            down if pd.notna(up) and pd.notna(down) and down > up and down > 0 else 0.0
+            for up, down in zip(up_move, down_move)
+        ],
         index=df.index,
         dtype="float64",
     )

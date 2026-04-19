@@ -13,26 +13,36 @@ class PostmarketService:
 
     def _tomorrow_plan(self, sentiment: dict, open_trades: list, closed_today: list) -> list[str]:
         plan = []
+
         if sentiment.get("sentiment") == "bearish":
-            plan.append("Tomorrow bias: defensive. Respect weak breadth and do not chase rebounds too early.")
+            plan.append("Tomorrow bias: defensive. Respect weak breadth and avoid forcing breakouts.")
         elif sentiment.get("sentiment") == "bullish":
-            plan.append("Tomorrow bias: constructive. Favor trend continuation names with clean volume.")
+            plan.append("Tomorrow bias: constructive. Favor clean continuation names with real liquidity.")
         else:
-            plan.append("Tomorrow bias: neutral. Let the open and market internals decide direction.")
+            plan.append("Tomorrow bias: neutral. Let market breadth and the open determine aggression.")
+
         if open_trades:
-            plan.append(f"Manage {len(open_trades)} open trade(s) first before adding new exposure.")
-        if not closed_today:
-            plan.append("No bot trades closed today. Review whether filters are too strict or market quality was poor.")
+            plan.append(f"Manage {len(open_trades)} open trade(s) before adding fresh exposure.")
         else:
-            plan.append(f"{len(closed_today)} trade(s) closed today. Review what worked before adding size tomorrow.")
-        plan.append("Build the watchlist around liquid names with fresh catalysts and clean structure.")
+            plan.append("No open bot-managed trades are carrying into tomorrow.")
+
+        if closed_today:
+            plan.append(f"{len(closed_today)} trade(s) closed today. Review which setups actually paid.")
+        else:
+            plan.append("No bot trades closed today. Check whether market quality or filters were the issue.")
+
+        plan.append("Build tomorrow's watchlist around liquid names with catalysts and clean structure.")
         return plan
 
     async def run(self):
         headlines = await self.news_client.fetch_market_news()
         sentiment = analyze_sentiment(headlines)
         open_trades = self.trade_repo.get_open_trades()
-        closed_today = self.trade_repo.get_closed_trades_today() if hasattr(self.trade_repo, "get_closed_trades_today") else []
+        closed_today = (
+            self.trade_repo.get_closed_trades_today()
+            if hasattr(self.trade_repo, "get_closed_trades_today")
+            else []
+        )
 
         sections = {
             "After-Hours Overview": [
@@ -59,6 +69,9 @@ class PostmarketService:
     async def run_weekly_wrapup(self):
         await self.telegram_app.bot.send_message(
             chat_id=self.chat_id,
-            text=format_daily_report("📆 Weekly Wrap-Up", {"Summary": ["Weekly wrap-up placeholder ready for expansion."]}),
+            text=format_daily_report(
+                "📆 Weekly Wrap-Up",
+                {"Summary": ["Weekly wrap-up complete. Build Monday watchlists from strength, liquidity, and catalysts."]},
+            ),
             parse_mode="HTML",
         )

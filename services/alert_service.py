@@ -3,11 +3,17 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict
 
-from brokers.models import OrderRequest
-
 
 class AlertService:
-    def __init__(self, alert_repo, trade_repo, execution_log_repo, config_service, settings, execution_router=None):
+    def __init__(
+        self,
+        alert_repo,
+        trade_repo,
+        execution_log_repo,
+        config_service,
+        settings,
+        execution_router=None,
+    ):
         self.alert_repo = alert_repo
         self.trade_repo = trade_repo
         self.execution_log_repo = execution_log_repo
@@ -16,47 +22,39 @@ class AlertService:
         self.execution_router = execution_router
 
     def _default_broker_for_payload(self, instrument_type: str) -> str:
-        preferred = getattr(self.settings, "default_stock_broker", "ALPACA")
-        if (instrument_type or "").lower() == "future":
-            return getattr(self.settings, "default_futures_broker", "TRADOVATE")
-        return preferred
+        return "TRADIER" if instrument_type.lower() == "option" else "ALPACA"
 
-    def _build_order_request(self, alert_id: int, payload: Dict[str, Any], broker: str, instrument_type: str) -> OrderRequest:
-        quantity = payload.get("quantity") or payload.get("shares") or getattr(self.settings, "default_order_quantity", 1)
+    def _build_execution_trade(self, payload: Dict[str, Any], broker: str, instrument_type: str) -> Dict[str, Any]:
+        side = str(payload.get("side") or "buy").lower()
+        quantity = int(payload.get("quantity") or payload.get("qty") or 1)
 
-        order_type = (payload.get("order_type") or "market").lower()
-        side = (payload.get("side") or "buy").lower()
-        symbol = payload["symbol"]
+        trade: Dict[str, Any] = {
+            "type": "option" if instrument_type.lower() == "option" else "stock",
+            "symbol": payload["symbol"],
+            "qty": max(quantity, 1),
+            "side": side,
+            "broker": broker,
+            "strategy": payload.get("strategy"),
+        }
 
-        return OrderRequest(
-            trade_id=str(alert_id),
-            broker=broker.upper(),
-            symbol=symbol,
-            side=side,
-            instrument_type=instrument_type.lower(),
-            quantity=quantity,
-            order_type=order_type,
-            limit_price=payload.get("limit_price"),
-            stop_price=payload.get("stop_price"),
-            option_right=payload.get("option_right"),
-            option_strike=payload.get("option_strike"),
-            option_expiry=payload.get("option_expiry"),
-            notes=payload.get("notes") or payload.get("strategy"),
-        )
+        if instrument_type.lower() == "option":
+            trade["option_symbol"] = payload.get("option_symbol")
+            if not trade["option_symbol"]:
+                raise ValueError("Option payload missing option_symbol")
+
+        return trade
 
     async def _execute_alert_if_enabled(self, alert_id: int, payload: Dict[str, Any]) -> None:
-        mode = (self.config_service.get_execution_mode() or "").lower()
-        if mode not in {"paper", "live"}:
-            return
-        if self.execution_router is None:
+        mode = self.config_service.get_execution_mode()
+        if mode == "alerts_only" or self.execution_router is None:
             return
 
         instrument_type = (payload.get("instrument_type") or "stock").lower()
         broker = (payload.get("broker") or self._default_broker_for_payload(instrument_type)).upper()
-        order_req = self._build_order_request(alert_id, payload, broker, instrument_type)
+        trade_request = self._build_execution_trade(payload, broker, instrument_type)
 
         try:
-            response = await self.execution_router.place_order(order_req)
+            response = await self.execution_router.execute(trade_request)
             status = "PAPER" if mode == "paper" else "EXECUTED"
             self.alert_repo.update_alert_status(alert_id, status)
             self.execution_log_repo.log_event(
@@ -68,7 +66,7 @@ class AlertService:
                     "symbol": payload.get("symbol"),
                     "strategy": payload.get("strategy"),
                     "side": payload.get("side"),
-                    "quantity": order_req.quantity,
+                    "quantity": trade_request["qty"],
                     "response": response,
                     "submitted_at": datetime.utcnow().isoformat(),
                 },
@@ -103,7 +101,12 @@ class AlertService:
         )
         return alert_id
 
-    async def create_trade_candidate(self, payload: Dict[str, Any], broker: str | None = None, instrument_type: str = "stock") -> int:
+    async def create_trade_candidate(
+        self,
+        payload: Dict[str, Any],
+        broker: str | None = None,
+        instrument_type: str = "stock",
+    ) -> int:
         selected_broker = broker or self._default_broker_for_payload(instrument_type)
         enriched_payload = {
             **payload,
@@ -118,15 +121,24 @@ class AlertService:
 
     def approve_alert(self, alert_id: int) -> None:
         self.alert_repo.update_alert_status(alert_id, "APPROVED")
-        self.execution_log_repo.log_event("ALERT_APPROVED", {"alert_id": alert_id, "approved_at": datetime.utcnow().isoformat()})
+        self.execution_log_repo.log_event(
+            "ALERT_APPROVED",
+            {"alert_id": alert_id, "approved_at": datetime.utcnow().isoformat()},
+        )
 
     def reject_alert(self, alert_id: int) -> None:
         self.alert_repo.update_alert_status(alert_id, "REJECTED")
-        self.execution_log_repo.log_event("ALERT_REJECTED", {"alert_id": alert_id, "rejected_at": datetime.utcnow().isoformat()})
+        self.execution_log_repo.log_event(
+            "ALERT_REJECTED",
+            {"alert_id": alert_id, "rejected_at": datetime.utcnow().isoformat()},
+        )
 
     def paper_trade_alert(self, alert_id: int) -> None:
         self.alert_repo.update_alert_status(alert_id, "PAPER")
-        self.execution_log_repo.log_event("ALERT_PAPER_TRADED", {"alert_id": alert_id, "paper_traded_at": datetime.utcnow().isoformat()})
+        self.execution_log_repo.log_event(
+            "ALERT_PAPER_TRADED",
+            {"alert_id": alert_id, "paper_traded_at": datetime.utcnow().isoformat()},
+        )
 
     def expire_alerts(self) -> None:
         timeout_seconds = getattr(self.settings, "bot_approval_timeout_seconds", 180)

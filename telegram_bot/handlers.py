@@ -6,9 +6,9 @@ from .callbacks import handle_trade_callback
 from .keyboards import (
     VALID_FILTER_CATEGORIES,
     build_control_panel_keyboard,
-    build_filter_profile_menu_keyboard,
     build_filter_categories_keyboard,
     build_filter_fields_keyboard,
+    build_filter_profile_menu_keyboard,
     build_mode_keyboard,
     build_presets_keyboard,
     build_strategies_keyboard,
@@ -61,14 +61,19 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
     async def _config(update, context):
         await config_command(update, context, config_service)
 
-    async def _auth(update):
+    async def _authorize_update(update) -> bool:
         if update.effective_chat.id != admin_chat_id:
-            await update.message.reply_text("Unauthorized.")
+            target = update.message or getattr(update, "callback_query", None)
+            if target is not None:
+                if hasattr(target, "reply_text"):
+                    await target.reply_text("Unauthorized.")
+                elif hasattr(target, "answer"):
+                    await target.answer("Unauthorized", show_alert=True)
             return False
         return True
 
     async def _run_lane(update, context, method_name: str, label: str):
-        if not await _auth(update):
+        if not await _authorize_update(update):
             return
         scanner = app_services.get("scanner")
         if scanner is None:
@@ -82,7 +87,7 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         )
 
     async def _scan(update, context):
-        if not await _auth(update):
+        if not await _authorize_update(update):
             return
         scanner = app_services.get("scanner")
         if scanner is None:
@@ -105,7 +110,7 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         await _run_lane(update, context, "scan_overnight_overview", "overnight scan")
 
     async def _scan_news(update, context):
-        if not await _auth(update):
+        if not await _authorize_update(update):
             return
         scanner = app_services.get("scanner")
         if scanner is None:
@@ -115,7 +120,7 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         await update.message.reply_text(format_news_scan(await scanner.scan_news_overview()), parse_mode="HTML")
 
     async def _scan_events(update, context):
-        if not await _auth(update):
+        if not await _authorize_update(update):
             return
         scanner = app_services.get("scanner")
         if scanner is None:
@@ -125,7 +130,7 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         await update.message.reply_text(format_event_scan(await scanner.scan_events_overview()), parse_mode="HTML")
 
     async def _scan_catalyst(update, context):
-        if not await _auth(update):
+        if not await _authorize_update(update):
             return
         scanner = app_services.get("scanner")
         if scanner is None:
@@ -135,7 +140,7 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         await update.message.reply_text(format_catalyst_scan(await scanner.scan_catalyst_overview()), parse_mode="HTML")
 
     async def _scan_status(update, context):
-        if not await _auth(update):
+        if not await _authorize_update(update):
             return
         scanner = app_services.get("scanner")
         if scanner is None:
@@ -144,7 +149,7 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         await update.message.reply_text(format_scan_status(scanner.get_last_scan_stats()), parse_mode="HTML")
 
     async def _refresh_snapshot(update, context):
-        if not await _auth(update):
+        if not await _authorize_update(update):
             return
         discovery = app_services.get("discovery_service")
         if discovery is None:
@@ -156,7 +161,7 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         await update.message.reply_text(format_snapshot_status(await discovery.snapshot_status(profile)), parse_mode="HTML")
 
     async def _snapshot_status(update, context):
-        if not await _auth(update):
+        if not await _authorize_update(update):
             return
         discovery = app_services.get("discovery_service")
         if discovery is None:
@@ -166,7 +171,7 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         await update.message.reply_text(format_snapshot_status(await discovery.snapshot_status(profile)), parse_mode="HTML")
 
     async def _show_passers(update, context):
-        if not await _auth(update):
+        if not await _authorize_update(update):
             return
         discovery = app_services.get("discovery_service")
         if discovery is None:
@@ -227,21 +232,28 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
             context.user_data.pop("pending_filter_edit", None)
             await query.edit_message_text("Control Panel", reply_markup=build_control_panel_keyboard())
             return
+
         if data == "cp|presets":
             await query.edit_message_text(
                 f"Select Overall Preset\nCurrent: {config_service.get_active_preset()}",
                 reply_markup=build_presets_keyboard(config_service.get_available_presets(), config_service.get_active_preset()),
             )
             return
+
         if data == "cp|mode":
             await query.edit_message_text(
                 f"Select Mode\nCurrent: {config_service.get_execution_mode()}",
                 reply_markup=build_mode_keyboard(config_service.get_execution_mode()),
             )
             return
+
         if data == "cp|strategies":
-            await query.edit_message_text("Strategies", reply_markup=build_strategies_keyboard(config_service.get_strategy_states()))
+            await query.edit_message_text(
+                "Strategies",
+                reply_markup=build_strategies_keyboard(config_service.get_strategy_states()),
+            )
             return
+
         if data == "cp|filters":
             active_profile = config_service.get_active_filter_profile()
             await query.edit_message_text(
@@ -249,6 +261,7 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
                 reply_markup=build_filter_profile_menu_keyboard(config_service.get_profile_preset_map(), active_profile),
             )
             return
+
         if data.startswith("fprofile|"):
             profile = data.split("|", 1)[1].lower()
             config_service.set_active_filter_profile(profile)
@@ -258,6 +271,7 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
                 reply_markup=build_filter_categories_keyboard(filters_snapshot, profile),
             )
             return
+
         if data.startswith("fcat|"):
             _, profile, category = data.split("|", 2)
             category = category.lower()
@@ -266,8 +280,12 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
                 return
             values = config_service.get_filter_fields(category, profile=profile)
             context.user_data.pop("pending_filter_edit", None)
-            await query.edit_message_text(_format_filter_category(profile, category, values), reply_markup=build_filter_fields_keyboard(profile, category, values))
+            await query.edit_message_text(
+                _format_filter_category(profile, category, values),
+                reply_markup=build_filter_fields_keyboard(profile, category, values),
+            )
             return
+
         if data.startswith("fedit|"):
             _, profile, category, field = data.split("|", 3)
             category = category.lower()
@@ -275,17 +293,28 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
                 await query.answer("Invalid filter category.", show_alert=True)
                 return
             current_value = config_service.get_filter_value(category, field, profile=profile)
-            context.user_data["pending_filter_edit"] = {"profile": profile, "category": category, "field": field}
-            await query.message.reply_text(f"Send new value for {profile}.{category}.{field}\nCurrent: {current_value}\nUse /cancel to stop.")
+            context.user_data["pending_filter_edit"] = {
+                "profile": profile,
+                "category": category,
+                "field": field,
+            }
+            await query.message.reply_text(
+                f"Send new value for {profile}.{category}.{field}\nCurrent: {current_value}\nUse /cancel to stop."
+            )
             return
+
         if data == "freset|all":
             config_service.reset_all_filter_overrides()
             context.user_data.pop("pending_filter_edit", None)
             await query.edit_message_text(
                 "All filter overrides cleared.",
-                reply_markup=build_filter_profile_menu_keyboard(config_service.get_profile_preset_map(), config_service.get_active_filter_profile()),
+                reply_markup=build_filter_profile_menu_keyboard(
+                    config_service.get_profile_preset_map(),
+                    config_service.get_active_filter_profile(),
+                ),
             )
             return
+
         if data.startswith("freset_profile|"):
             profile = data.split("|", 1)[1].lower()
             config_service.reset_filter_overrides(profile=profile)
@@ -294,6 +323,7 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
                 reply_markup=build_filter_profile_menu_keyboard(config_service.get_profile_preset_map(), profile),
             )
             return
+
         if data.startswith("freset|"):
             _, profile, category = data.split("|", 2)
             category = category.lower()
@@ -308,23 +338,36 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
                 reply_markup=build_filter_fields_keyboard(profile, category, values),
             )
             return
+
         if data.startswith("set|preset|"):
             preset_name = data.split("|", 2)[2]
             config_service.set_active_preset(preset_name)
-            await query.edit_message_text(f"Overall preset updated to: {preset_name}", reply_markup=build_control_panel_keyboard())
+            await query.edit_message_text(
+                f"Overall preset updated to: {preset_name}",
+                reply_markup=build_control_panel_keyboard(),
+            )
             return
+
         if data.startswith("set|mode|"):
             mode = data.split("|", 2)[2]
             config_service.set_execution_mode(mode)
-            await query.edit_message_text(f"Execution mode updated to: {mode}", reply_markup=build_control_panel_keyboard())
+            await query.edit_message_text(
+                f"Execution mode updated to: {mode}",
+                reply_markup=build_control_panel_keyboard(),
+            )
             return
+
         if data.startswith("toggle|strategy|"):
             strategy_name = data.split("|", 2)[2]
             states = config_service.get_strategy_states()
             current = bool(states.get(strategy_name, True))
             config_service.settings_repo.set_strategy_state(strategy_name, not current)
-            await query.edit_message_text("Strategies updated", reply_markup=build_strategies_keyboard(config_service.get_strategy_states()))
+            await query.edit_message_text(
+                "Strategies updated",
+                reply_markup=build_strategies_keyboard(config_service.get_strategy_states()),
+            )
             return
+
         await query.edit_message_text("Unknown control panel action.", reply_markup=build_control_panel_keyboard())
 
     return [

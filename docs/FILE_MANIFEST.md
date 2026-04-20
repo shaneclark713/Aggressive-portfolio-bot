@@ -9,10 +9,10 @@
 
 ## Data and strategy
 - `data/*`: Polygon/Finnhub clients, universe filtering, scanners
-- `strategies/*`: playbooks and router
+- `strategies/*`: strategy playbooks and router
 - `risk/*`: kill switch, risk math, sizing
 
 ## Execution and accounting
-- `brokers/*`: IBKR and Tradovate adapters plus execution router
+- `brokers/*`: Alpaca and Tradier adapters plus execution router
 - `ledger/*`: Google Sheets export
 - `sandbox/*`: backtesting engine and helpers

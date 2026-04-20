@@ -1,5 +1,16 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Optional
-@dataclass
+
+from .enums import ExecutionMode
+
+
+@dataclass(slots=True)
 class AlertEvent:
-    trade_id: str; symbol: str; strategy: str; side: str; execution_mode: str; message_id: Optional[int] = None
+    trade_id: str
+    symbol: str
+    strategy: str
+    side: str
+    execution_mode: ExecutionMode
+    message_id: Optional[int] = None

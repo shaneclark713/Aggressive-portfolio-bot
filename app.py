@@ -30,7 +30,10 @@ from services.postmarket_service import PostmarketService
 from services.live_execution_service import LiveExecutionService
 from services.options_chain_ingest_service import OptionsChainIngestService
 from services.trailing_stop_service import TrailingStopService
+from services.position_sync_service import PositionSyncService
+from services.broker_ladder_service import BrokerLadderService
 from ledger.sheets_client import GoogleSheetsLedger
+
 
 async def main() -> None:
     settings = load_settings()
@@ -92,6 +95,8 @@ async def main() -> None:
     live_execution_service = LiveExecutionService(settings_repo, execution_router)
     options_chain_ingest_service = OptionsChainIngestService(settings_repo, tradier)
     trailing_stop_service = TrailingStopService(settings_repo)
+    position_sync_service = PositionSyncService(trailing_stop_service, alpaca_client=alpaca, tradier_client=tradier)
+    broker_ladder_service = BrokerLadderService(execution_router)
 
     watchlist_service = WatchlistService(universe_filter)
     alert_service = AlertService(alert_repo, trade_repo, execution_log_repo, config_service, settings, execution_router=execution_router)
@@ -111,6 +116,8 @@ async def main() -> None:
         "live_execution_service": live_execution_service,
         "options_chain_ingest_service": options_chain_ingest_service,
         "trailing_stop_service": trailing_stop_service,
+        "position_sync_service": position_sync_service,
+        "broker_ladder_service": broker_ladder_service,
     }
 
     telegram_app = build_telegram_app(settings.telegram_bot_token, app_services, config_service, settings.telegram_admin_chat_id)
@@ -150,6 +157,7 @@ async def main() -> None:
             except Exception:
                 pass
         conn.close()
+
 
 if __name__ == "__main__":
     asyncio.run(main())

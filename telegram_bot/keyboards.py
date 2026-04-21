@@ -45,6 +45,9 @@ def build_control_panel_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton("Options", callback_data="cp|options_menu"),
                 InlineKeyboardButton("ML", callback_data="cp|ml_menu"),
             ],
+            [
+                InlineKeyboardButton("Exec Profiles", callback_data="cp|exec_profiles"),
+            ],
         ]
     )
 
@@ -68,6 +71,7 @@ def build_execution_menu_keyboard() -> InlineKeyboardMarkup:
         [
             [InlineKeyboardButton("Risk Settings", callback_data="exec|show"), InlineKeyboardButton("Safeguards", callback_data="exec|safeguards")],
             [InlineKeyboardButton("Entry Ladder", callback_data="exec|ladder"), InlineKeyboardButton("Trailing Stop", callback_data="exec|trailing")],
+            [InlineKeyboardButton("Submit Ladder", callback_data="exec|submit_ladder"), InlineKeyboardButton("Open Trails", callback_data="exec|open_trails")],
             [InlineKeyboardButton("⬅ Back", callback_data="cp|back")],
         ]
     )
@@ -80,7 +84,7 @@ def build_options_menu_keyboard(options_settings: dict) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(enabled_text, callback_data="opt|toggle")],
             [InlineKeyboardButton("Delta/OI/Expiry", callback_data="opt|show"), InlineKeyboardButton("Chain Summary", callback_data="opt|chain")],
             [InlineKeyboardButton("IV Status", callback_data="opt|iv"), InlineKeyboardButton("Flow Status", callback_data="opt|flow")],
-            [InlineKeyboardButton("Multi-Leg", callback_data="opt|multileg"), InlineKeyboardButton("⬅ Back", callback_data="cp|back")],
+            [InlineKeyboardButton("Refresh Chain", callback_data="opt|refresh_chain"), InlineKeyboardButton("⬅ Back", callback_data="cp|back")],
         ]
     )
 
@@ -93,6 +97,25 @@ def build_ml_menu_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton("⬅ Back", callback_data="cp|back")],
         ]
     )
+
+
+def build_execution_profile_menu_keyboard(mode: str, strategies: list[str]) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(f"{mode}: {strategy}", callback_data=f"ep|view|{mode}|{strategy}")] for strategy in strategies]
+    rows.append([InlineKeyboardButton("⬅ Back", callback_data="cp|back")])
+    return InlineKeyboardMarkup(rows)
+
+
+def build_execution_profile_edit_keyboard(mode: str, strategy: str) -> InlineKeyboardMarkup:
+    fields = [
+        ("risk_pct", "Risk %"),
+        ("atr_multiplier", "ATR Mult"),
+        ("ladder_steps", "Ladder Steps"),
+        ("ladder_spacing_pct", "Ladder Spacing"),
+        ("trail_value", "Trail Value"),
+    ]
+    rows = [[InlineKeyboardButton(label, callback_data=f"ep|edit|{mode}|{strategy}|{field}")] for field, label in fields]
+    rows.append([InlineKeyboardButton("⬅ Back", callback_data="cp|exec_profiles")])
+    return InlineKeyboardMarkup(rows)
 
 
 def build_presets_keyboard(presets: list[str], current: str) -> InlineKeyboardMarkup:

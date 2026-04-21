@@ -34,11 +34,44 @@ class LiveExecutionService:
         )
         return {
             "symbol": symbol,
-            "mode": mode,
-            "strategy": strategy,
+            "side": side,
+            "mode": self.profile_store.normalize_mode(mode),
+            "strategy": self.profile_store.normalize_strategy(strategy),
             "profile": profile,
             "entries": entries,
-            "submit_ready": mode != "alerts_only",
+            "submit_ready": self.profile_store.normalize_mode(mode) != "alerts_only",
+        }
+
+    async def build_exit_ladder(
+        self,
+        symbol: str,
+        side: str,
+        total_size: int,
+        entry_price: float,
+        stop_loss: float,
+        mode: str,
+        strategy: str,
+        rr_targets: list[float] | None = None,
+    ) -> dict[str, Any]:
+        profile = self.profile_store.get_profile(mode, strategy)
+        rr_targets = rr_targets or [1.0, 1.5, 2.0]
+        risk_per_unit = abs(float(entry_price) - float(stop_loss))
+        exits = self.ladder_manager.build_exit_ladder(
+            entry_price=entry_price,
+            side=side,
+            total_size=total_size,
+            rr_targets=rr_targets,
+            risk_per_unit=risk_per_unit,
+        )
+        return {
+            "symbol": symbol,
+            "side": side,
+            "mode": self.profile_store.normalize_mode(mode),
+            "strategy": self.profile_store.normalize_strategy(strategy),
+            "profile": profile,
+            "risk_per_unit": risk_per_unit,
+            "exits": exits,
+            "submit_ready": self.profile_store.normalize_mode(mode) != "alerts_only",
         }
 
     async def submit_single_option(self, symbol: str, option_symbol: str, side: str, quantity: int) -> Any:

@@ -45,7 +45,9 @@ def build_control_panel_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton("Options", callback_data="cp|options_menu"),
                 InlineKeyboardButton("ML", callback_data="cp|ml_menu"),
             ],
-            [InlineKeyboardButton("Exec Profiles", callback_data="cp|exec_profiles")],
+            [
+                InlineKeyboardButton("Exec Profiles", callback_data="cp|exec_profiles"),
+            ],
         ]
     )
 
@@ -144,7 +146,7 @@ def build_filter_profile_menu_keyboard(profile_preset_map: dict[str, str], activ
 
 def build_filter_categories_keyboard(filters_snapshot: dict[str, dict], current_profile: str) -> InlineKeyboardMarkup:
     rows = [[InlineKeyboardButton(f"{_pretty_name(category)} ({len(filters_snapshot.get(category, {}))})", callback_data=f"fcat|{current_profile}|{category}")] for category in VALID_FILTER_CATEGORIES]
-    rows.append([InlineKeyboardButton("♻ Reset This Profile", callback_data=f"freset_profile|{current_profile}")])
+    rows.append([InlineKeyboardButton("♻ Reset This Preset", callback_data=f"freset_profile|{current_profile}")])
     rows.append([InlineKeyboardButton("⬅ Back", callback_data="cp|filters")])
     return InlineKeyboardMarkup(rows)
 

@@ -27,8 +27,10 @@ from services.trade_review_service import TradeReviewService
 from services.premarket_service import PremarketService
 from services.midday_service import MiddayService
 from services.postmarket_service import PostmarketService
+from services.live_execution_service import LiveExecutionService
+from services.options_chain_ingest_service import OptionsChainIngestService
+from services.trailing_stop_service import TrailingStopService
 from ledger.sheets_client import GoogleSheetsLedger
-
 
 async def main() -> None:
     settings = load_settings()
@@ -47,7 +49,6 @@ async def main() -> None:
     market = PolygonMarketDataClient(settings.polygon_api_key)
     news = FinnhubNewsClient(settings.finnhub_api_key)
     econ = FinnhubEconomicCalendarClient(settings.finnhub_api_key)
-
     await market.connect()
     await news.connect()
     await econ.connect()
@@ -55,20 +56,13 @@ async def main() -> None:
     router = StrategyRouter()
     discovery_service = DiscoveryService(market, config_service, settings.storage_path)
     universe_filter = UniverseFilter(market, config_service, discovery_service)
-    scanner = ScannerService(
-        market,
-        universe_filter,
-        router,
-        news_client=news,
-        econ_client=econ,
-    )
+    scanner = ScannerService(market, universe_filter, router, news_client=news, econ_client=econ)
 
     alpaca = AlpacaClient(
         api_key=getattr(settings, "alpaca_api_key", ""),
         secret_key=getattr(settings, "alpaca_secret_key", ""),
         base_url=getattr(settings, "alpaca_base_url", "https://paper-api.alpaca.markets"),
     )
-
     tradier = TradierClient(
         token=getattr(settings, "tradier_access_token", ""),
         account_id=getattr(settings, "tradier_account_id", ""),
@@ -77,8 +71,11 @@ async def main() -> None:
 
     for client in (alpaca, tradier):
         try:
-            if hasattr(client, "connect"):
-                await client.connect()
+            connect = getattr(client, "connect", None)
+            if connect is not None:
+                result = connect()
+                if asyncio.iscoroutine(result):
+                    await result
         except Exception:
             pass
 
@@ -91,21 +88,13 @@ async def main() -> None:
     )
     sheets.connect()
 
-    execution_router = ExecutionRouter(
-        alpaca_client=alpaca,
-        tradier_client=tradier,
-        config_service=config_service,
-    )
+    execution_router = ExecutionRouter(alpaca_client=alpaca, tradier_client=tradier, config_service=config_service)
+    live_execution_service = LiveExecutionService(settings_repo, execution_router)
+    options_chain_ingest_service = OptionsChainIngestService(settings_repo, tradier)
+    trailing_stop_service = TrailingStopService(settings_repo)
 
     watchlist_service = WatchlistService(universe_filter)
-    alert_service = AlertService(
-        alert_repo,
-        trade_repo,
-        execution_log_repo,
-        config_service,
-        settings,
-        execution_router=execution_router,
-    )
+    alert_service = AlertService(alert_repo, trade_repo, execution_log_repo, config_service, settings, execution_router=execution_router)
     trade_review_service = TradeReviewService(trade_repo, settings)
 
     app_services = {
@@ -117,55 +106,22 @@ async def main() -> None:
         "execution_router": execution_router,
         "discovery_service": discovery_service,
         "universe_filter": universe_filter,
+        "tradier_client": tradier,
+        "alpaca_client": alpaca,
+        "live_execution_service": live_execution_service,
+        "options_chain_ingest_service": options_chain_ingest_service,
+        "trailing_stop_service": trailing_stop_service,
     }
 
-    telegram_app = build_telegram_app(
-        settings.telegram_bot_token,
-        app_services,
-        config_service,
-        settings.telegram_admin_chat_id,
-    )
+    telegram_app = build_telegram_app(settings.telegram_bot_token, app_services, config_service, settings.telegram_admin_chat_id)
     telegram_app.bot_data["app_services"] = app_services
 
-    premarket = PremarketService(
-        telegram_app,
-        settings.telegram_admin_chat_id,
-        news,
-        econ,
-        watchlist_service,
-        scanner,
-        alert_service,
-        config_service,
-        alert_repo,
-    )
-
-    midday = MiddayService(
-        telegram_app,
-        settings.telegram_admin_chat_id,
-        news,
-        None,
-        None,
-        trade_repo,
-        trade_review_service,
-    )
-
-    postmarket = PostmarketService(
-        telegram_app,
-        settings.telegram_admin_chat_id,
-        news,
-        trade_repo,
-    )
+    premarket = PremarketService(telegram_app, settings.telegram_admin_chat_id, news, econ, watchlist_service, scanner, alert_service, config_service, alert_repo)
+    midday = MiddayService(telegram_app, settings.telegram_admin_chat_id, news, None, None, trade_repo, trade_review_service)
+    postmarket = PostmarketService(telegram_app, settings.telegram_admin_chat_id, news, trade_repo)
 
     scheduler = build_scheduler(settings.app_timezone)
-    register_jobs(
-        scheduler,
-        {
-            "premarket": premarket,
-            "midday": midday,
-            "postmarket": postmarket,
-        },
-        settings.app_timezone,
-    )
+    register_jobs(scheduler, {"premarket": premarket, "midday": midday, "postmarket": postmarket}, settings.app_timezone)
     scheduler.start()
 
     await telegram_app.initialize()
@@ -184,16 +140,16 @@ async def main() -> None:
         await market.close()
         await news.close()
         await econ.close()
-
         for client in (alpaca, tradier):
             try:
-                if hasattr(client, "close"):
-                    await client.close()
+                close = getattr(client, "close", None)
+                if close is not None:
+                    result = close()
+                    if asyncio.iscoroutine(result):
+                        await result
             except Exception:
                 pass
-
         conn.close()
-
 
 if __name__ == "__main__":
     asyncio.run(main())

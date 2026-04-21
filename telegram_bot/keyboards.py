@@ -32,13 +32,106 @@ def build_control_panel_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [
+                InlineKeyboardButton("Scans", callback_data="cp|scan_menu"),
                 InlineKeyboardButton("Presets", callback_data="cp|presets"),
-                InlineKeyboardButton("Mode", callback_data="cp|mode"),
             ],
             [
+                InlineKeyboardButton("Mode", callback_data="cp|mode"),
                 InlineKeyboardButton("Strategies", callback_data="cp|strategies"),
-                InlineKeyboardButton("Filters", callback_data="cp|filters"),
             ],
+            [
+                InlineKeyboardButton("Filters", callback_data="cp|filters"),
+                InlineKeyboardButton("Execution", callback_data="cp|execution_menu"),
+            ],
+            [
+                InlineKeyboardButton("Options", callback_data="cp|options_menu"),
+                InlineKeyboardButton("ML", callback_data="cp|ml_menu"),
+            ],
+        ]
+    )
+
+
+def build_scan_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("Market", callback_data="scan|market"),
+                InlineKeyboardButton("Premarket", callback_data="scan|premarket"),
+            ],
+            [
+                InlineKeyboardButton("Midday", callback_data="scan|midday"),
+                InlineKeyboardButton("Overnight", callback_data="scan|overnight"),
+            ],
+            [
+                InlineKeyboardButton("News", callback_data="scan|news"),
+                InlineKeyboardButton("Events", callback_data="scan|events"),
+            ],
+            [
+                InlineKeyboardButton("Catalyst", callback_data="scan|catalyst"),
+                InlineKeyboardButton("Full Scan", callback_data="scan|full"),
+            ],
+            [
+                InlineKeyboardButton("Scan Status", callback_data="scan|status"),
+                InlineKeyboardButton("Passers", callback_data="scan|passers"),
+            ],
+            [
+                InlineKeyboardButton("Refresh Snapshot", callback_data="scan|refresh_snapshot"),
+                InlineKeyboardButton("Snapshot Status", callback_data="scan|snapshot_status"),
+            ],
+            [InlineKeyboardButton("⬅ Back", callback_data="cp|back")],
+        ]
+    )
+
+
+def build_execution_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("Risk %", callback_data="exec|show"),
+                InlineKeyboardButton("Safeguards", callback_data="exec|safeguards"),
+            ],
+            [
+                InlineKeyboardButton("ATR Mult", callback_data="exec|show"),
+                InlineKeyboardButton("Position Mode", callback_data="exec|show"),
+            ],
+            [InlineKeyboardButton("⬅ Back", callback_data="cp|back")],
+        ]
+    )
+
+
+def build_options_menu_keyboard(options_settings: dict) -> InlineKeyboardMarkup:
+    enabled_text = "🟢 Options ON" if options_settings.get("enabled") else "⚪ Options OFF"
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton(enabled_text, callback_data="opt|toggle")],
+            [
+                InlineKeyboardButton("Delta Range", callback_data="opt|show"),
+                InlineKeyboardButton("Min OI", callback_data="opt|show"),
+            ],
+            [
+                InlineKeyboardButton("Expiry", callback_data="opt|show"),
+                InlineKeyboardButton("IV Status", callback_data="opt|iv"),
+            ],
+            [
+                InlineKeyboardButton("Flow Status", callback_data="opt|flow"),
+                InlineKeyboardButton("⬅ Back", callback_data="cp|back"),
+            ],
+        ]
+    )
+
+
+def build_ml_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("ML Weights", callback_data="ml|show"),
+                InlineKeyboardButton("Sector Status", callback_data="ml|sector"),
+            ],
+            [
+                InlineKeyboardButton("Flow Status", callback_data="ml|flow"),
+                InlineKeyboardButton("IV Status", callback_data="ml|iv"),
+            ],
+            [InlineKeyboardButton("⬅ Back", callback_data="cp|back")],
         ]
     )
 

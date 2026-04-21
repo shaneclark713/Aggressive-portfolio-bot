@@ -194,3 +194,61 @@ def format_passers(scan_type: str, rows: Iterable[Mapping[str, Any]]) -> str:
             f"${_to_float(row.get('day_dollar_volume')) / 1_000_000:.1f}M DV | {_to_float(row.get('change_pct')):.2f}%"
         )
     return f"🌊 <b>{escape(scan_type.title())} Passers</b>\n\n" + "\n".join(lines)
+
+
+def format_options_settings(settings: Mapping[str, Any]) -> str:
+    return (
+        "🧾 <b>Options Settings</b>\n\n"
+        f"<b>Enabled:</b> {settings.get('enabled')}\n"
+        f"<b>Delta Range:</b> {settings.get('delta_min')} - {settings.get('delta_max')}\n"
+        f"<b>Min Open Interest:</b> {settings.get('min_open_interest')}\n"
+        f"<b>Expiry Preference:</b> {settings.get('expiry_preference')}"
+    )
+
+
+def format_ml_weights(weights: Mapping[str, Any]) -> str:
+    if not weights:
+        return "🧠 <b>ML Weights</b>\n\nNo weights set yet."
+    lines = [f"• {escape(str(k))}: {escape(str(v))}" for k, v in sorted(weights.items())]
+    return "🧠 <b>ML Weights</b>\n\n" + "\n".join(lines)
+
+
+def format_sector_status(summary: Mapping[str, Any]) -> str:
+    if not summary:
+        return "🏭 <b>Sector Status</b>\n\nNo sector data available."
+    lines = [f"• {escape(str(k))}: {v}" for k, v in summary.items()]
+    return "🏭 <b>Sector Status</b>\n\n" + "\n".join(lines)
+
+
+def format_flow_status(summary: Mapping[str, Any]) -> str:
+    return (
+        "🌊 <b>Options Flow Status</b>\n\n"
+        f"<b>Flows:</b> {summary.get('flow_count', 0)}\n"
+        f"<b>Bullish:</b> {summary.get('bullish_flows', 0)}\n"
+        f"<b>Bearish:</b> {summary.get('bearish_flows', 0)}\n"
+        f"<b>Total Premium:</b> ${_to_float(summary.get('total_premium')):,.2f}\n"
+        f"<b>Bias:</b> {escape(str(summary.get('bias', 'neutral')))}"
+    )
+
+
+def format_iv_status(summary: Mapping[str, Any]) -> str:
+    return (
+        "📈 <b>IV Status</b>\n\n"
+        f"<b>Contracts:</b> {summary.get('contract_count', 0)}\n"
+        f"<b>Avg IV:</b> {summary.get('avg_iv', 0)}\n"
+        f"<b>Total OI:</b> {summary.get('total_open_interest', 0)}\n"
+        f"<b>Total Volume:</b> {summary.get('total_volume', 0)}\n"
+        f"<b>Regime:</b> {escape(str(summary.get('iv_regime', 'unknown')))}"
+    )
+
+
+def format_execution_settings(settings: Mapping[str, Any]) -> str:
+    return (
+        "🛡 <b>Execution Settings</b>\n\n"
+        f"<b>Risk %:</b> {settings.get('risk_pct', 0.75)}\n"
+        f"<b>ATR Multiplier:</b> {settings.get('atr_multiplier', 1.0)}\n"
+        f"<b>Position Mode:</b> {settings.get('position_mode', 'auto')}\n"
+        f"<b>Max Spread %:</b> {settings.get('max_spread_pct', 0.03)}\n"
+        f"<b>Min Volume:</b> {settings.get('min_volume', 500000)}\n"
+        f"<b>Max Slippage %:</b> {settings.get('max_slippage_pct', 0.02)}"
+    )

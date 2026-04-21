@@ -4,42 +4,36 @@ import json
 
 from telegram.ext import CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
-from execution.ladder_manager import LadderManager
-from execution.safeguards import ExecutionSafeguards
 from execution.strategy_execution_profiles import StrategyExecutionProfiles
+from services.broker_ladder_service import BrokerLadderService
 from services.iv_analyzer import IVAnalyzer
 from services.options_chain_ingest_service import OptionsChainIngestService
 from services.options_chain_service import OptionsChainService
 from services.options_flow_analyzer import OptionsFlowAnalyzer
+from services.position_sync_service import PositionSyncService
 from services.sector_analyzer import SectorAnalyzer
 from services.trailing_stop_service import TrailingStopService
 
 from .callbacks import handle_trade_callback
 from .keyboards import (
-    VALID_FILTER_CATEGORIES,
     build_control_panel_keyboard,
     build_execution_menu_keyboard,
     build_execution_profile_edit_keyboard,
     build_execution_profile_menu_keyboard,
-    build_filter_categories_keyboard,
-    build_filter_fields_keyboard,
-    build_filter_profile_menu_keyboard,
     build_ml_menu_keyboard,
-    build_mode_keyboard,
     build_options_menu_keyboard,
-    build_presets_keyboard,
-    build_scan_menu_keyboard,
-    build_strategies_keyboard,
 )
 from .formatters import (
     format_chain_summary,
     format_execution_settings,
     format_flow_status,
     format_iv_status,
+    format_ladder_execution_result,
     format_ladder_submission,
     format_ml_weights,
     format_open_trails,
     format_options_settings,
+    format_position_sync_result,
     format_profile_execution_status,
     format_sector_status,
 )
@@ -71,7 +65,6 @@ async def panel_command(update, context):
 
 
 async def cancel_command(update, context):
-    context.user_data.pop("pending_filter_edit", None)
     context.user_data.pop("pending_exec_profile_edit", None)
     await update.message.reply_text("Canceled.")
 
@@ -82,11 +75,12 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
     flow_analyzer = OptionsFlowAnalyzer()
     iv_analyzer = IVAnalyzer()
     chain_service = OptionsChainService()
-    ladder_manager = LadderManager()
     profile_store = StrategyExecutionProfiles(settings_repo)
     trailing_stop_service = TrailingStopService(settings_repo)
     options_chain_ingest = OptionsChainIngestService(settings_repo, app_services.get("tradier_client"))
     live_execution_service = app_services.get("live_execution_service")
+    broker_ladder_service = BrokerLadderService(app_services.get("execution_router"))
+    position_sync_service = PositionSyncService(trailing_stop_service, alpaca_client=app_services.get("alpaca_client"), tradier_client=app_services.get("tradier_client"))
 
     def _get_ui_settings(name: str, default: dict) -> dict:
         overrides = settings_repo.get_filter_overrides()
@@ -101,34 +95,10 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         return payload
 
     def _get_execution_settings() -> dict:
-        return _get_ui_settings(
-            "execution_settings",
-            {
-                "risk_pct": 0.75,
-                "atr_multiplier": 1.0,
-                "position_mode": "auto",
-                "max_spread_pct": 0.03,
-                "min_volume": 500000,
-                "max_slippage_pct": 0.02,
-                "ladder_steps": 3,
-                "ladder_spacing_pct": 0.01,
-                "trail_type": "percent",
-                "trail_value": 0.02,
-            },
-        )
+        return _get_ui_settings("execution_settings", {"risk_pct": 0.75, "atr_multiplier": 1.0, "position_mode": "auto", "max_spread_pct": 0.03, "min_volume": 500000, "max_slippage_pct": 0.02, "ladder_steps": 3, "ladder_spacing_pct": 0.01, "trail_type": "percent", "trail_value": 0.02})
 
     def _get_options_settings() -> dict:
-        return _get_ui_settings(
-            "options_settings",
-            {
-                "enabled": False,
-                "delta_min": 0.30,
-                "delta_max": 0.70,
-                "min_open_interest": 1000,
-                "expiry_preference": "weekly",
-                "chain_symbol": "SPY",
-            },
-        )
+        return _get_ui_settings("options_settings", {"enabled": False, "delta_min": 0.30, "delta_max": 0.70, "min_open_interest": 1000, "expiry_preference": "weekly", "chain_symbol": "SPY"})
 
     def _update_options_settings(**updates) -> dict:
         current = _get_options_settings()
@@ -158,9 +128,8 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         return True
 
     async def _ml_weights(update, context):
-        if not await _authorize_update(update):
-            return
-        await update.message.reply_text(format_ml_weights(_get_ml_weights()), parse_mode="HTML")
+        if await _authorize_update(update):
+            await update.message.reply_text(format_ml_weights(_get_ml_weights()), parse_mode="HTML")
 
     async def _sector_status(update, context):
         if not await _authorize_update(update):
@@ -171,14 +140,12 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         await update.message.reply_text(format_sector_status(sector_analyzer.summarize(symbols)), parse_mode="HTML")
 
     async def _flow_alerts(update, context):
-        if not await _authorize_update(update):
-            return
-        await update.message.reply_text(format_flow_status(flow_analyzer.summarize(_get_options_flow_rows())), parse_mode="HTML")
+        if await _authorize_update(update):
+            await update.message.reply_text(format_flow_status(flow_analyzer.summarize(_get_options_flow_rows())), parse_mode="HTML")
 
     async def _iv_status(update, context):
-        if not await _authorize_update(update):
-            return
-        await update.message.reply_text(format_iv_status(iv_analyzer.summarize_chain(_get_option_chain_rows())), parse_mode="HTML")
+        if await _authorize_update(update):
+            await update.message.reply_text(format_iv_status(iv_analyzer.summarize_chain(_get_option_chain_rows())), parse_mode="HTML")
 
     async def _refresh_option_chain(update, context):
         if not await _authorize_update(update):
@@ -196,16 +163,18 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         await update.message.reply_text(format_chain_summary(payload["summary"]) + f"\n\n<b>Symbol:</b> {symbol}", parse_mode="HTML")
 
     async def _chain_status(update, context):
-        if not await _authorize_update(update):
-            return
-        summary = chain_service.summarize_chain(_get_option_chain_rows())
-        await update.message.reply_text(format_chain_summary(summary), parse_mode="HTML")
+        if await _authorize_update(update):
+            await update.message.reply_text(format_chain_summary(chain_service.summarize_chain(_get_option_chain_rows())), parse_mode="HTML")
 
     async def _trail_status(update, context):
+        if await _authorize_update(update):
+            await update.message.reply_text(format_open_trails(trailing_stop_service.list_positions()), parse_mode="HTML")
+
+    async def _sync_positions(update, context):
         if not await _authorize_update(update):
             return
-        states = trailing_stop_service.list_positions()
-        await update.message.reply_text(format_open_trails(states), parse_mode="HTML")
+        rows = await position_sync_service.sync_demo_positions()
+        await update.message.reply_text(format_position_sync_result(rows), parse_mode="HTML")
 
     async def _profile_exec_status(update, context):
         if not await _authorize_update(update):
@@ -221,17 +190,22 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         if len(context.args) < 5:
             await update.message.reply_text("Usage: /submit_ladder <symbol> <side> <total_size> <entry_price> <strategy> [mode]")
             return
-        symbol = context.args[0].upper()
-        side = context.args[1].upper()
-        total_size = int(context.args[2])
-        entry_price = float(context.args[3])
-        strategy = context.args[4]
+        symbol, side, total_size, entry_price, strategy = context.args[:5]
         mode = context.args[5] if len(context.args) >= 6 else config_service.get_execution_mode()
-        if live_execution_service is None:
-            await update.message.reply_text("Live execution service not available.")
+        plan = await live_execution_service.submit_stock_ladder(symbol.upper(), side.upper(), int(total_size), float(entry_price), mode, strategy)
+        await update.message.reply_text(format_ladder_submission(plan), parse_mode="HTML")
+
+    async def _execute_ladder(update, context):
+        if not await _authorize_update(update):
             return
-        result = await live_execution_service.submit_stock_ladder(symbol, side, total_size, entry_price, mode, strategy)
-        await update.message.reply_text(format_ladder_submission(result), parse_mode="HTML")
+        if len(context.args) < 5:
+            await update.message.reply_text("Usage: /execute_ladder <symbol> <side> <total_size> <entry_price> <strategy> [mode]")
+            return
+        symbol, side, total_size, entry_price, strategy = context.args[:5]
+        mode = context.args[5] if len(context.args) >= 6 else config_service.get_execution_mode()
+        plan = await live_execution_service.submit_stock_ladder(symbol.upper(), side.upper(), int(total_size), float(entry_price), mode, strategy)
+        result = await broker_ladder_service.submit_stock_ladder(symbol.upper(), side.upper(), plan["entries"])
+        await update.message.reply_text(format_ladder_execution_result(result), parse_mode="HTML")
 
     async def _set_profile_value(update, context):
         if not await _authorize_update(update):
@@ -261,12 +235,7 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
             except Exception:
                 value = raw_value
             profile = profile_store.set_profile(pending["mode"], pending["strategy"], {field: value})
-            await update.message.reply_text(
-                format_profile_execution_status(pending["mode"], pending["strategy"], profile),
-                parse_mode="HTML",
-                reply_markup=build_execution_profile_edit_keyboard(pending["mode"], pending["strategy"]),
-            )
-            return
+            await update.message.reply_text(format_profile_execution_status(pending["mode"], pending["strategy"], profile), parse_mode="HTML", reply_markup=build_execution_profile_edit_keyboard(pending["mode"], pending["strategy"]))
 
     async def _guarded_callback(update, context):
         query = update.callback_query
@@ -279,77 +248,44 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         if data.startswith(("a|", "p|", "r|")):
             await handle_trade_callback(update, context, app_services)
             return
-
         if data == "cp|back":
             context.user_data.pop("pending_exec_profile_edit", None)
             await query.edit_message_text("Control Panel", reply_markup=build_control_panel_keyboard())
             return
-
         if data == "cp|execution_menu":
             await query.edit_message_text(format_execution_settings(_get_execution_settings()), parse_mode="HTML", reply_markup=build_execution_menu_keyboard())
             return
-
         if data == "cp|options_menu":
             settings = _get_options_settings()
             await query.edit_message_text(format_options_settings(settings), parse_mode="HTML", reply_markup=build_options_menu_keyboard(settings))
             return
-
         if data == "cp|ml_menu":
             await query.edit_message_text("ML / Analytics Menu", reply_markup=build_ml_menu_keyboard())
             return
-
         if data == "cp|exec_profiles":
             states = config_service.get_strategy_states()
             strategies = list(states.keys()) or ["breakout_box"]
-            await query.edit_message_text(
-                "Execution Profiles",
-                reply_markup=build_execution_profile_menu_keyboard(config_service.get_execution_mode(), strategies),
-            )
+            await query.edit_message_text("Execution Profiles", reply_markup=build_execution_profile_menu_keyboard(config_service.get_execution_mode(), strategies))
             return
-
         if data.startswith("ep|view|"):
             _, _, mode, strategy = data.split("|", 3)
             profile = profile_store.get_profile(mode, strategy)
-            await query.edit_message_text(
-                format_profile_execution_status(mode, strategy, profile),
-                parse_mode="HTML",
-                reply_markup=build_execution_profile_edit_keyboard(mode, strategy),
-            )
+            await query.edit_message_text(format_profile_execution_status(mode, strategy, profile), parse_mode="HTML", reply_markup=build_execution_profile_edit_keyboard(mode, strategy))
             return
-
         if data.startswith("ep|edit|"):
             _, _, mode, strategy, field = data.split("|", 4)
             context.user_data["pending_exec_profile_edit"] = {"mode": mode, "strategy": strategy, "field": field}
             await query.message.reply_text(f"Send new value for {mode}.{strategy}.{field}\nUse /cancel to stop.")
             return
-
         if data.startswith("exec|"):
             action = data.split("|", 1)[1]
-            settings = _get_execution_settings()
             if action == "submit_ladder":
-                if live_execution_service is None:
-                    await query.edit_message_text("Live execution service not available.", reply_markup=build_execution_menu_keyboard())
-                    return
-                result = await live_execution_service.submit_stock_ladder("SPY", "LONG", 120, 10.0, config_service.get_execution_mode(), "breakout_box")
-                await query.edit_message_text(format_ladder_submission(result), parse_mode="HTML", reply_markup=build_execution_menu_keyboard())
+                plan = await live_execution_service.submit_stock_ladder("SPY", "LONG", 120, 10.0, config_service.get_execution_mode(), "breakout_box")
+                await query.edit_message_text(format_ladder_submission(plan), parse_mode="HTML", reply_markup=build_execution_menu_keyboard())
                 return
             if action == "open_trails":
                 await query.edit_message_text(format_open_trails(trailing_stop_service.list_positions()), parse_mode="HTML", reply_markup=build_execution_menu_keyboard())
                 return
-            if action == "safeguards":
-                guard = ExecutionSafeguards(settings)
-                valid, message = guard.validate_trade({"price": 10, "bid": 9.98, "ask": 10.02, "volume": settings.get("min_volume", 500000)})
-                await query.edit_message_text(format_execution_settings(settings) + f"\n\n<b>Safeguard Check:</b> {message} ({valid})", parse_mode="HTML", reply_markup=build_execution_menu_keyboard())
-                return
-            if action == "ladder":
-                entries = ladder_manager.build_entry_ladder(10.0, "LONG", 120, steps=settings.get("ladder_steps", 3), spacing_pct=settings.get("ladder_spacing_pct", 0.01))
-                await query.edit_message_text(format_ladder_submission({"symbol": "SPY", "mode": config_service.get_execution_mode(), "strategy": "breakout_box", "profile": settings, "entries": entries}), parse_mode="HTML", reply_markup=build_execution_menu_keyboard())
-                return
-            if action == "trailing":
-                states = trailing_stop_service.list_positions()
-                await query.edit_message_text(format_open_trails(states), parse_mode="HTML", reply_markup=build_execution_menu_keyboard())
-                return
-
         if data.startswith("opt|"):
             action = data.split("|", 1)[1]
             settings = _get_options_settings()
@@ -364,8 +300,7 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
                 await query.edit_message_text(format_flow_status(flow_analyzer.summarize(_get_options_flow_rows())), parse_mode="HTML", reply_markup=build_options_menu_keyboard(settings))
                 return
             if action == "chain":
-                summary = chain_service.summarize_chain(_get_option_chain_rows())
-                await query.edit_message_text(format_chain_summary(summary), parse_mode="HTML", reply_markup=build_options_menu_keyboard(settings))
+                await query.edit_message_text(format_chain_summary(chain_service.summarize_chain(_get_option_chain_rows())), parse_mode="HTML", reply_markup=build_options_menu_keyboard(settings))
                 return
             if action == "refresh_chain":
                 symbol = settings.get("chain_symbol", "SPY")
@@ -388,8 +323,10 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         CommandHandler("refresh_option_chain", _refresh_option_chain),
         CommandHandler("chain_status", _chain_status),
         CommandHandler("trail_status", _trail_status),
+        CommandHandler("sync_positions", _sync_positions),
         CommandHandler("profile_exec_status", _profile_exec_status),
         CommandHandler("submit_ladder", _submit_ladder),
+        CommandHandler("execute_ladder", _execute_ladder),
         CommandHandler("set_profile_exec", _set_profile_value),
         CommandHandler("cancel", cancel_command),
         MessageHandler(filters.TEXT & ~filters.COMMAND, _pending_text),

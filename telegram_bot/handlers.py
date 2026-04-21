@@ -4,9 +4,14 @@ import json
 
 from telegram.ext import CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
+from execution.ladder_manager import LadderManager
+from execution.multi_leg import MultiLegOrderBuilder
 from execution.safeguards import ExecutionSafeguards
+from execution.trailing_manager import TrailingManager
 from services.iv_analyzer import IVAnalyzer
+from services.options_chain_service import OptionsChainService
 from services.options_flow_analyzer import OptionsFlowAnalyzer
+from services.options_order_service import OptionsOrderService
 from services.sector_analyzer import SectorAnalyzer
 
 from .callbacks import handle_trade_callback
@@ -26,18 +31,22 @@ from .keyboards import (
 )
 from .formatters import (
     format_catalyst_scan,
+    format_chain_summary,
     format_event_scan,
     format_execution_settings,
     format_flow_status,
     format_full_scan_summary,
     format_iv_status,
+    format_ladder_preview,
     format_ml_weights,
+    format_multileg_preview,
     format_news_scan,
     format_options_settings,
     format_passers,
     format_scan_status,
     format_sector_status,
     format_snapshot_status,
+    format_trailing_preview,
 )
 
 
@@ -100,6 +109,11 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
     sector_analyzer = SectorAnalyzer()
     flow_analyzer = OptionsFlowAnalyzer()
     iv_analyzer = IVAnalyzer()
+    chain_service = OptionsChainService()
+    ladder_manager = LadderManager()
+    trailing_manager = TrailingManager()
+    multileg_builder = MultiLegOrderBuilder()
+    options_order_service = OptionsOrderService()
 
     def _get_ui_settings(name: str, default: dict) -> dict:
         overrides = settings_repo.get_filter_overrides()
@@ -123,6 +137,10 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
                 "max_spread_pct": 0.03,
                 "min_volume": 500000,
                 "max_slippage_pct": 0.02,
+                "ladder_steps": 3,
+                "ladder_spacing_pct": 0.01,
+                "trail_type": "percent",
+                "trail_value": 0.02,
             },
         )
 
@@ -187,10 +205,7 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
             return
         await update.message.reply_text(f"Running {label}...")
         result = await getattr(scanner, method_name)()
-        await update.message.reply_text(
-            format_scan_status(result["stats"]) + f"\n\nCandidates returned: {len(result['candidates'])}",
-            parse_mode="HTML",
-        )
+        await update.message.reply_text(format_scan_status(result["stats"]) + f"\n\nCandidates returned: {len(result['candidates'])}", parse_mode="HTML")
 
     async def _scan(update, context):
         if not await _authorize_update(update):
@@ -426,10 +441,7 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
 
         context.user_data.pop("pending_filter_edit", None)
         values = config_service.get_filter_fields(category, profile=profile)
-        await update.message.reply_text(
-            f"Updated {profile}.{category}.{field} to {new_value}.",
-            reply_markup=build_filter_fields_keyboard(profile, category, values),
-        )
+        await update.message.reply_text(f"Updated {profile}.{category}.{field} to {new_value}.", reply_markup=build_filter_fields_keyboard(profile, category, values))
 
     async def _guarded_callback(update, context):
         query = update.callback_query
@@ -454,20 +466,12 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
             return
 
         if data == "cp|execution_menu":
-            await query.edit_message_text(
-                format_execution_settings(_get_execution_settings()),
-                parse_mode="HTML",
-                reply_markup=build_execution_menu_keyboard(),
-            )
+            await query.edit_message_text(format_execution_settings(_get_execution_settings()), parse_mode="HTML", reply_markup=build_execution_menu_keyboard())
             return
 
         if data == "cp|options_menu":
             settings = _get_options_settings()
-            await query.edit_message_text(
-                format_options_settings(settings),
-                parse_mode="HTML",
-                reply_markup=build_options_menu_keyboard(settings),
-            )
+            await query.edit_message_text(format_options_settings(settings), parse_mode="HTML", reply_markup=build_options_menu_keyboard(settings))
             return
 
         if data == "cp|ml_menu":
@@ -475,17 +479,11 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
             return
 
         if data == "cp|presets":
-            await query.edit_message_text(
-                f"Select Overall Preset\nCurrent: {config_service.get_active_preset()}",
-                reply_markup=build_presets_keyboard(config_service.get_available_presets(), config_service.get_active_preset()),
-            )
+            await query.edit_message_text(f"Select Overall Preset\nCurrent: {config_service.get_active_preset()}", reply_markup=build_presets_keyboard(config_service.get_available_presets(), config_service.get_active_preset()))
             return
 
         if data == "cp|mode":
-            await query.edit_message_text(
-                f"Select Mode\nCurrent: {config_service.get_execution_mode()}",
-                reply_markup=build_mode_keyboard(config_service.get_execution_mode()),
-            )
+            await query.edit_message_text(f"Select Mode\nCurrent: {config_service.get_execution_mode()}", reply_markup=build_mode_keyboard(config_service.get_execution_mode()))
             return
 
         if data == "cp|strategies":
@@ -494,10 +492,7 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
 
         if data == "cp|filters":
             active_profile = config_service.get_active_filter_profile()
-            await query.edit_message_text(
-                "Choose which scan preset you want to edit.",
-                reply_markup=build_filter_profile_menu_keyboard(config_service.get_profile_preset_map(), active_profile),
-            )
+            await query.edit_message_text("Choose which scan preset you want to edit.", reply_markup=build_filter_profile_menu_keyboard(config_service.get_profile_preset_map(), active_profile))
             return
 
         if data.startswith("scan|"):
@@ -559,6 +554,16 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
                 text = format_execution_settings(settings) + f"\n\n<b>Safeguard Check:</b> {message} ({valid})"
                 await query.edit_message_text(text, parse_mode="HTML", reply_markup=build_execution_menu_keyboard())
                 return
+            if action == "ladder":
+                entries = ladder_manager.build_entry_ladder(entry_price=10.0, side="LONG", total_size=120, steps=settings.get("ladder_steps", 3), spacing_pct=settings.get("ladder_spacing_pct", 0.01))
+                exits = ladder_manager.build_exit_ladder(entry_price=10.0, side="LONG", total_size=120, rr_targets=[1.0, 2.0, 3.0], risk_per_unit=0.5)
+                await query.edit_message_text(format_ladder_preview({"entries": entries, "exits": exits}), parse_mode="HTML", reply_markup=build_execution_menu_keyboard())
+                return
+            if action == "trailing":
+                state = trailing_manager.initial_state(entry_price=10.0, stop_loss=9.5, side="LONG", trail_type=settings.get("trail_type", "percent"), trail_value=settings.get("trail_value", 0.02))
+                updated = trailing_manager.update(state, 10.8)
+                await query.edit_message_text(format_trailing_preview(updated), parse_mode="HTML", reply_markup=build_execution_menu_keyboard())
+                return
             await query.edit_message_text(format_execution_settings(settings), parse_mode="HTML", reply_markup=build_execution_menu_keyboard())
             return
 
@@ -574,6 +579,14 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
                 return
             if action == "flow":
                 await query.edit_message_text(format_flow_status(flow_analyzer.summarize(_get_options_flow_rows())), parse_mode="HTML", reply_markup=build_options_menu_keyboard(settings))
+                return
+            if action == "chain":
+                summary = chain_service.summarize_chain(_get_option_chain_rows())
+                await query.edit_message_text(format_chain_summary(summary), parse_mode="HTML", reply_markup=build_options_menu_keyboard(settings))
+                return
+            if action == "multileg":
+                order = options_order_service.build_vertical_spread_order("ABC240621C00050000", "ABC240621C00055000", 1, debit=True)
+                await query.edit_message_text(format_multileg_preview(order), parse_mode="HTML", reply_markup=build_options_menu_keyboard(settings))
                 return
             await query.edit_message_text(format_options_settings(settings), parse_mode="HTML", reply_markup=build_options_menu_keyboard(settings))
             return

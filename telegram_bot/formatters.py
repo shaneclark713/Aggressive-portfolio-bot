@@ -99,26 +99,11 @@ def format_scan_status(stats: Mapping[str, Any]) -> str:
 
 def format_news_scan(summary: Mapping[str, Any]) -> str:
     headlines = summary.get("headlines", [])
-    return format_daily_report(
-        "📰 News Scan",
-        {
-            "Summary": [f"Headline count: {summary.get('headline_count', len(headlines))}"],
-            "Top Headlines": headlines or ["None loaded"],
-        },
-    )
+    return format_daily_report("📰 News Scan", {"Summary": [f"Headline count: {summary.get('headline_count', len(headlines))}"], "Top Headlines": headlines or ["None loaded"]})
 
 
 def format_event_scan(summary: Mapping[str, Any]) -> str:
-    return format_daily_report(
-        "📅 Event Scan",
-        {
-            "Summary": [
-                f"Events loaded: {summary.get('event_count', 0)}",
-                f"High-impact events: {summary.get('high_impact_count', 0)}",
-            ],
-            "Today's Events": summary.get("events", []) or ["None loaded"],
-        },
-    )
+    return format_daily_report("📅 Event Scan", {"Summary": [f"Events loaded: {summary.get('event_count', 0)}", f"High-impact events: {summary.get('high_impact_count', 0)}"], "Today's Events": summary.get("events", []) or ["None loaded"]})
 
 
 def format_catalyst_scan(summary: Mapping[str, Any]) -> str:
@@ -126,47 +111,20 @@ def format_catalyst_scan(summary: Mapping[str, Any]) -> str:
     for item in summary.get("catalysts", []):
         top = " | ".join(item.get("headlines", [])[:2]) or "No headlines"
         rows.append(f"{item.get('symbol', 'UNKNOWN')}: {item.get('headline_count', 0)} headline(s) | {top}")
-    return format_daily_report(
-        "⚡ Catalyst Scan",
-        {
-            "Summary": [f"Symbols checked: {summary.get('symbols_checked', 0)}"],
-            "Catalysts": rows or ["No catalyst headlines loaded"],
-        },
-    )
+    return format_daily_report("⚡ Catalyst Scan", {"Summary": [f"Symbols checked: {summary.get('symbols_checked', 0)}"], "Catalysts": rows or ["No catalyst headlines loaded"]})
 
 
 def format_full_scan_summary(summary: Mapping[str, Any]) -> str:
     return format_daily_report(
         "🧩 Full Scan Summary",
         {
-            "Premarket": [
-                f"Candidates: {len(summary.get('premarket', {}).get('candidates', []))}",
-                f"Rate limited: {summary.get('premarket', {}).get('stats', {}).get('rate_limited', 0)}",
-            ],
-            "Market": [
-                f"Candidates: {len(summary.get('market', {}).get('candidates', []))}",
-                f"Rate limited: {summary.get('market', {}).get('stats', {}).get('rate_limited', 0)}",
-            ],
-            "Midday": [
-                f"Candidates: {len(summary.get('midday', {}).get('candidates', []))}",
-                f"Rate limited: {summary.get('midday', {}).get('stats', {}).get('rate_limited', 0)}",
-            ],
-            "Overnight": [
-                f"Candidates: {len(summary.get('overnight', {}).get('candidates', []))}",
-                f"Rate limited: {summary.get('overnight', {}).get('stats', {}).get('rate_limited', 0)}",
-            ],
-            "News / Events / Catalyst": [
-                f"News headlines: {summary.get('news', {}).get('headline_count', 0)}",
-                f"Events: {summary.get('events', {}).get('event_count', 0)}",
-                f"Catalyst symbols: {summary.get('catalyst', {}).get('symbols_checked', 0)}",
-            ],
+            "Premarket": [f"Candidates: {len(summary.get('premarket', {}).get('candidates', []))}", f"Rate limited: {summary.get('premarket', {}).get('stats', {}).get('rate_limited', 0)}"],
+            "Market": [f"Candidates: {len(summary.get('market', {}).get('candidates', []))}", f"Rate limited: {summary.get('market', {}).get('stats', {}).get('rate_limited', 0)}"],
+            "Midday": [f"Candidates: {len(summary.get('midday', {}).get('candidates', []))}", f"Rate limited: {summary.get('midday', {}).get('stats', {}).get('rate_limited', 0)}"],
+            "Overnight": [f"Candidates: {len(summary.get('overnight', {}).get('candidates', []))}", f"Rate limited: {summary.get('overnight', {}).get('stats', {}).get('rate_limited', 0)}"],
+            "News / Events / Catalyst": [f"News headlines: {summary.get('news', {}).get('headline_count', 0)}", f"Events: {summary.get('events', {}).get('event_count', 0)}", f"Catalyst symbols: {summary.get('catalyst', {}).get('symbols_checked', 0)}"],
         },
     )
-
-
-def format_tomorrow_plan(plan):
-    bullets = list(plan) if plan else ["No clear bias yet. Stay selective and keep risk small."]
-    return "🧭 <b>Tomorrow Game Plan</b>\n\n" + "\n".join(f"• {escape(str(item))}" for item in bullets)
 
 
 def format_snapshot_status(status: Mapping[str, Any]) -> str:
@@ -189,10 +147,7 @@ def format_passers(scan_type: str, rows: Iterable[Mapping[str, Any]]) -> str:
         return f"🌊 <b>{escape(scan_type.title())} Passers</b>\n\nNo symbols are currently passing the discovery filters."
     lines = []
     for row in rows[:25]:
-        lines.append(
-            f"• {escape(str(row.get('symbol', 'UNKNOWN')))} | ${_to_float(row.get('price')):.2f} | "
-            f"${_to_float(row.get('day_dollar_volume')) / 1_000_000:.1f}M DV | {_to_float(row.get('change_pct')):.2f}%"
-        )
+        lines.append(f"• {escape(str(row.get('symbol', 'UNKNOWN')))} | ${_to_float(row.get('price')):.2f} | ${_to_float(row.get('day_dollar_volume')) / 1_000_000:.1f}M DV | {_to_float(row.get('change_pct')):.2f}%")
     return f"🌊 <b>{escape(scan_type.title())} Passers</b>\n\n" + "\n".join(lines)
 
 
@@ -251,4 +206,51 @@ def format_execution_settings(settings: Mapping[str, Any]) -> str:
         f"<b>Max Spread %:</b> {settings.get('max_spread_pct', 0.03)}\n"
         f"<b>Min Volume:</b> {settings.get('min_volume', 500000)}\n"
         f"<b>Max Slippage %:</b> {settings.get('max_slippage_pct', 0.02)}"
+    )
+
+
+def format_chain_summary(summary: Mapping[str, Any]) -> str:
+    return (
+        "⛓ <b>Options Chain Summary</b>\n\n"
+        f"<b>Contracts:</b> {summary.get('contract_count', 0)}\n"
+        f"<b>Calls:</b> {summary.get('call_count', 0)}\n"
+        f"<b>Puts:</b> {summary.get('put_count', 0)}\n"
+        f"<b>Total OI:</b> {summary.get('total_open_interest', 0)}\n"
+        f"<b>Total Volume:</b> {summary.get('total_volume', 0)}\n"
+        f"<b>Avg Mark:</b> ${_to_float(summary.get('avg_mark')):.2f}"
+    )
+
+
+def format_ladder_preview(payload: Mapping[str, Any]) -> str:
+    entries = payload.get("entries", [])
+    exits = payload.get("exits", [])
+    entry_lines = [f"• Step {row.get('step')}: {row.get('action')} {row.get('qty')} @ ${_to_float(row.get('limit_price')):.2f}" for row in entries] or ["• None"]
+    exit_lines = [f"• Step {row.get('step')}: {row.get('action')} {row.get('qty')} @ ${_to_float(row.get('limit_price')):.2f} ({row.get('rr_target')}R)" for row in exits] or ["• None"]
+    return (
+        "🪜 <b>Ladder Preview</b>\n\n"
+        "<b>Entries</b>\n" + "\n".join(entry_lines) + "\n\n"
+        "<b>Exits</b>\n" + "\n".join(exit_lines)
+    )
+
+
+def format_trailing_preview(state: Mapping[str, Any]) -> str:
+    return (
+        "🧷 <b>Trailing Stop Preview</b>\n\n"
+        f"<b>Side:</b> {escape(str(state.get('side', 'LONG')))}\n"
+        f"<b>Entry:</b> ${_to_float(state.get('entry_price')):.2f}\n"
+        f"<b>Best Price:</b> ${_to_float(state.get('best_price')):.2f}\n"
+        f"<b>Active Stop:</b> ${_to_float(state.get('active_stop')):.2f}\n"
+        f"<b>Stop Hit:</b> {state.get('stop_hit', False)}"
+    )
+
+
+def format_multileg_preview(order: Mapping[str, Any]) -> str:
+    legs = order.get("legs", [])
+    leg_lines = [f"• {leg.get('action')} {leg.get('quantity')} {escape(str(leg.get('option_symbol', '')))}" for leg in legs] or ["• None"]
+    return (
+        "🧩 <b>Multi-Leg Preview</b>\n\n"
+        f"<b>Strategy:</b> {escape(str(order.get('strategy_type', 'unknown')))}\n"
+        f"<b>Valid:</b> {order.get('is_valid', False)}\n"
+        f"<b>Validation:</b> {escape(str(order.get('validation_reason', 'n/a')))}\n\n"
+        + "\n".join(leg_lines)
     )

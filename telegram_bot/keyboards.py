@@ -18,13 +18,11 @@ def _display_value(value) -> str:
 
 def build_trade_keyboard(trade_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton("✅ Approve", callback_data=f"a|{trade_id}"),
-                InlineKeyboardButton("📝 Paper", callback_data=f"p|{trade_id}"),
-                InlineKeyboardButton("❌ Reject", callback_data=f"r|{trade_id}"),
-            ]
-        ]
+        [[
+            InlineKeyboardButton("✅ Approve", callback_data=f"a|{trade_id}"),
+            InlineKeyboardButton("📝 Paper", callback_data=f"p|{trade_id}"),
+            InlineKeyboardButton("❌ Reject", callback_data=f"r|{trade_id}"),
+        ]]
     )
 
 
@@ -54,30 +52,12 @@ def build_control_panel_keyboard() -> InlineKeyboardMarkup:
 def build_scan_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [
-                InlineKeyboardButton("Market", callback_data="scan|market"),
-                InlineKeyboardButton("Premarket", callback_data="scan|premarket"),
-            ],
-            [
-                InlineKeyboardButton("Midday", callback_data="scan|midday"),
-                InlineKeyboardButton("Overnight", callback_data="scan|overnight"),
-            ],
-            [
-                InlineKeyboardButton("News", callback_data="scan|news"),
-                InlineKeyboardButton("Events", callback_data="scan|events"),
-            ],
-            [
-                InlineKeyboardButton("Catalyst", callback_data="scan|catalyst"),
-                InlineKeyboardButton("Full Scan", callback_data="scan|full"),
-            ],
-            [
-                InlineKeyboardButton("Scan Status", callback_data="scan|status"),
-                InlineKeyboardButton("Passers", callback_data="scan|passers"),
-            ],
-            [
-                InlineKeyboardButton("Refresh Snapshot", callback_data="scan|refresh_snapshot"),
-                InlineKeyboardButton("Snapshot Status", callback_data="scan|snapshot_status"),
-            ],
+            [InlineKeyboardButton("Market", callback_data="scan|market"), InlineKeyboardButton("Premarket", callback_data="scan|premarket")],
+            [InlineKeyboardButton("Midday", callback_data="scan|midday"), InlineKeyboardButton("Overnight", callback_data="scan|overnight")],
+            [InlineKeyboardButton("News", callback_data="scan|news"), InlineKeyboardButton("Events", callback_data="scan|events")],
+            [InlineKeyboardButton("Catalyst", callback_data="scan|catalyst"), InlineKeyboardButton("Full Scan", callback_data="scan|full")],
+            [InlineKeyboardButton("Scan Status", callback_data="scan|status"), InlineKeyboardButton("Passers", callback_data="scan|passers")],
+            [InlineKeyboardButton("Refresh Snapshot", callback_data="scan|refresh_snapshot"), InlineKeyboardButton("Snapshot Status", callback_data="scan|snapshot_status")],
             [InlineKeyboardButton("⬅ Back", callback_data="cp|back")],
         ]
     )
@@ -86,14 +66,8 @@ def build_scan_menu_keyboard() -> InlineKeyboardMarkup:
 def build_execution_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [
-                InlineKeyboardButton("Risk %", callback_data="exec|show"),
-                InlineKeyboardButton("Safeguards", callback_data="exec|safeguards"),
-            ],
-            [
-                InlineKeyboardButton("ATR Mult", callback_data="exec|show"),
-                InlineKeyboardButton("Position Mode", callback_data="exec|show"),
-            ],
+            [InlineKeyboardButton("Risk Settings", callback_data="exec|show"), InlineKeyboardButton("Safeguards", callback_data="exec|safeguards")],
+            [InlineKeyboardButton("Entry Ladder", callback_data="exec|ladder"), InlineKeyboardButton("Trailing Stop", callback_data="exec|trailing")],
             [InlineKeyboardButton("⬅ Back", callback_data="cp|back")],
         ]
     )
@@ -104,18 +78,9 @@ def build_options_menu_keyboard(options_settings: dict) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton(enabled_text, callback_data="opt|toggle")],
-            [
-                InlineKeyboardButton("Delta Range", callback_data="opt|show"),
-                InlineKeyboardButton("Min OI", callback_data="opt|show"),
-            ],
-            [
-                InlineKeyboardButton("Expiry", callback_data="opt|show"),
-                InlineKeyboardButton("IV Status", callback_data="opt|iv"),
-            ],
-            [
-                InlineKeyboardButton("Flow Status", callback_data="opt|flow"),
-                InlineKeyboardButton("⬅ Back", callback_data="cp|back"),
-            ],
+            [InlineKeyboardButton("Delta/OI/Expiry", callback_data="opt|show"), InlineKeyboardButton("Chain Summary", callback_data="opt|chain")],
+            [InlineKeyboardButton("IV Status", callback_data="opt|iv"), InlineKeyboardButton("Flow Status", callback_data="opt|flow")],
+            [InlineKeyboardButton("Multi-Leg", callback_data="opt|multileg"), InlineKeyboardButton("⬅ Back", callback_data="cp|back")],
         ]
     )
 
@@ -123,67 +88,41 @@ def build_options_menu_keyboard(options_settings: dict) -> InlineKeyboardMarkup:
 def build_ml_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [
-                InlineKeyboardButton("ML Weights", callback_data="ml|show"),
-                InlineKeyboardButton("Sector Status", callback_data="ml|sector"),
-            ],
-            [
-                InlineKeyboardButton("Flow Status", callback_data="ml|flow"),
-                InlineKeyboardButton("IV Status", callback_data="ml|iv"),
-            ],
+            [InlineKeyboardButton("ML Weights", callback_data="ml|show"), InlineKeyboardButton("Sector Status", callback_data="ml|sector")],
+            [InlineKeyboardButton("Flow Status", callback_data="ml|flow"), InlineKeyboardButton("IV Status", callback_data="ml|iv")],
             [InlineKeyboardButton("⬅ Back", callback_data="cp|back")],
         ]
     )
 
 
 def build_presets_keyboard(presets: list[str], current: str) -> InlineKeyboardMarkup:
-    rows = [
-        [InlineKeyboardButton(f"{'✅ ' if name == current else ''}{_pretty_name(name)}", callback_data=f"set|preset|{name}")]
-        for name in presets
-    ]
+    rows = [[InlineKeyboardButton(f"{'✅ ' if name == current else ''}{_pretty_name(name)}", callback_data=f"set|preset|{name}")] for name in presets]
     rows.append([InlineKeyboardButton("⬅ Back", callback_data="cp|back")])
     return InlineKeyboardMarkup(rows)
 
 
 def build_mode_keyboard(current: str) -> InlineKeyboardMarkup:
     modes = [("alerts_only", "Alerts Only"), ("paper", "Paper"), ("live", "Live")]
-    rows = [
-        [InlineKeyboardButton(f"{'✅ ' if value == current else ''}{label}", callback_data=f"set|mode|{value}")]
-        for value, label in modes
-    ]
+    rows = [[InlineKeyboardButton(f"{'✅ ' if value == current else ''}{label}", callback_data=f"set|mode|{value}")] for value, label in modes]
     rows.append([InlineKeyboardButton("⬅ Back", callback_data="cp|back")])
     return InlineKeyboardMarkup(rows)
 
 
 def build_strategies_keyboard(states: dict[str, bool]) -> InlineKeyboardMarkup:
-    rows = [
-        [InlineKeyboardButton(f"{'🟢' if is_enabled else '⚪'} {strategy_name}", callback_data=f"toggle|strategy|{strategy_name}")]
-        for strategy_name, is_enabled in states.items()
-    ]
+    rows = [[InlineKeyboardButton(f"{'🟢' if is_enabled else '⚪'} {strategy_name}", callback_data=f"toggle|strategy|{strategy_name}")] for strategy_name, is_enabled in states.items()]
     rows.append([InlineKeyboardButton("⬅ Back", callback_data="cp|back")])
     return InlineKeyboardMarkup(rows)
 
 
 def build_filter_profile_menu_keyboard(profile_preset_map: dict[str, str], active_profile: str) -> InlineKeyboardMarkup:
-    rows = [
-        [
-            InlineKeyboardButton(
-                f"{'✅ ' if profile == active_profile else ''}{_pretty_name(profile)} ({_pretty_name(profile_preset_map.get(profile, ''))})",
-                callback_data=f"fprofile|{profile}",
-            )
-        ]
-        for profile in FILTER_PROFILES
-    ]
+    rows = [[InlineKeyboardButton(f"{'✅ ' if profile == active_profile else ''}{_pretty_name(profile)} ({_pretty_name(profile_preset_map.get(profile, ''))})", callback_data=f"fprofile|{profile}")] for profile in FILTER_PROFILES]
     rows.append([InlineKeyboardButton("♻ Reset All Filters", callback_data="freset|all")])
     rows.append([InlineKeyboardButton("⬅ Back", callback_data="cp|back")])
     return InlineKeyboardMarkup(rows)
 
 
 def build_filter_categories_keyboard(filters_snapshot: dict[str, dict], current_profile: str) -> InlineKeyboardMarkup:
-    rows = [
-        [InlineKeyboardButton(f"{_pretty_name(category)} ({len(filters_snapshot.get(category, {}))})", callback_data=f"fcat|{current_profile}|{category}")]
-        for category in VALID_FILTER_CATEGORIES
-    ]
+    rows = [[InlineKeyboardButton(f"{_pretty_name(category)} ({len(filters_snapshot.get(category, {}))})", callback_data=f"fcat|{current_profile}|{category}")] for category in VALID_FILTER_CATEGORIES]
     rows.append([InlineKeyboardButton("♻ Reset This Preset", callback_data=f"freset_profile|{current_profile}")])
     rows.append([InlineKeyboardButton("⬅ Back", callback_data="cp|filters")])
     return InlineKeyboardMarkup(rows)

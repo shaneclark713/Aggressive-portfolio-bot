@@ -48,12 +48,14 @@ from .formatters import (
     format_execution_trailing,
     format_flow_status,
     format_iv_status,
+    format_exit_ladder_submission,
     format_ladder_execution_result,
     format_ladder_submission,
     format_ml_weights,
     format_open_trails,
     format_options_settings,
     format_position_sync_result,
+    format_triggered_exit_result,
     format_profile_execution_status,
     format_scan_status,
     format_sector_status,
@@ -388,7 +390,7 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
     async def _sync_positions(update, context):
         if not await _authorize_update(update):
             return
-        rows = await position_sync_service.sync_demo_positions()
+        rows = await position_sync_service.sync_live_positions(include_demo_fallback=True)
         await update.message.reply_text(format_position_sync_result(rows), parse_mode="HTML")
 
     async def _profile_exec_status(update, context):
@@ -427,6 +429,79 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         plan = await live_execution_service.submit_stock_ladder(symbol.upper(), side.upper(), int(total_size), float(entry_price), mode, strategy)
         result = await broker_ladder_service.submit_stock_ladder(symbol.upper(), side.upper(), plan["entries"])
         await update.message.reply_text(format_ladder_execution_result(result), parse_mode="HTML")
+
+    async def _submit_exit_ladder(update, context):
+        if not await _authorize_update(update):
+            return
+        if live_execution_service is None:
+            await update.message.reply_text("Live execution service not configured.")
+            return
+        if len(context.args) < 6:
+            await update.message.reply_text("Usage: /submit_exit_ladder <symbol> <side> <total_size> <entry_price> <stop_loss> <strategy> [mode] [rr_targets_csv]")
+            return
+        symbol, side, total_size, entry_price, stop_loss, strategy = context.args[:6]
+        mode = context.args[6] if len(context.args) >= 7 else config_service.get_execution_mode()
+        rr_targets = [float(x) for x in context.args[7].split(',')] if len(context.args) >= 8 else None
+        plan = await live_execution_service.submit_exit_ladder(symbol.upper(), side.upper(), int(total_size), float(entry_price), float(stop_loss), mode, strategy, rr_targets=rr_targets)
+        await update.message.reply_text(format_exit_ladder_submission(plan), parse_mode="HTML")
+
+    async def _execute_exit_ladder(update, context):
+        if not await _authorize_update(update):
+            return
+        if live_execution_service is None:
+            await update.message.reply_text("Live execution service not configured.")
+            return
+        if len(context.args) < 6:
+            await update.message.reply_text("Usage: /execute_exit_ladder <symbol> <side> <total_size> <entry_price> <stop_loss> <strategy> [mode] [rr_targets_csv]")
+            return
+        symbol, side, total_size, entry_price, stop_loss, strategy = context.args[:6]
+        mode = context.args[6] if len(context.args) >= 7 else config_service.get_execution_mode()
+        rr_targets = [float(x) for x in context.args[7].split(',')] if len(context.args) >= 8 else None
+        plan = await live_execution_service.submit_exit_ladder(symbol.upper(), side.upper(), int(total_size), float(entry_price), float(stop_loss), mode, strategy, rr_targets=rr_targets)
+        result = await broker_ladder_service.submit_exit_ladder(symbol.upper(), plan["exits"])
+        await update.message.reply_text(format_ladder_execution_result(result), parse_mode="HTML")
+
+    async def _trigger_trails(update, context):
+        if not await _authorize_update(update):
+            return
+        if live_execution_service is None:
+            await update.message.reply_text("Live execution service not configured.")
+            return
+        limit_buffer_pct = _parse_decimal_or_percent(context.args[0]) if context.args else 0.0
+        await position_sync_service.sync_live_positions(include_demo_fallback=False)
+        result = await live_execution_service.execute_triggered_trailing_exits(limit_buffer_pct=limit_buffer_pct)
+        await update.message.reply_text(format_triggered_exit_result(result), parse_mode="HTML")
+
+    async def _option_order(update, context):
+        if not await _authorize_update(update):
+            return
+        if live_execution_service is None:
+            await update.message.reply_text("Live execution service not configured.")
+            return
+        if len(context.args) < 4:
+            await update.message.reply_text("Usage: /option_order <symbol> <option_symbol> <side> <qty> [order_type] [price]")
+            return
+        symbol, option_symbol, side, qty = context.args[:4]
+        order_type = context.args[4] if len(context.args) >= 5 else "market"
+        price = float(context.args[5]) if len(context.args) >= 6 else None
+        result = await live_execution_service.submit_single_option(symbol.upper(), option_symbol.upper(), side, int(qty), order_type=order_type, price=price)
+        await update.message.reply_text(format_simple_lines("Option Order Result", [str(result)]), parse_mode="HTML")
+
+    async def _vertical_spread(update, context):
+        if not await _authorize_update(update):
+            return
+        if live_execution_service is None:
+            await update.message.reply_text("Live execution service not configured.")
+            return
+        if len(context.args) < 4:
+            await update.message.reply_text("Usage: /vertical_spread <symbol> <long_leg> <short_leg> <qty> [debit|credit] [order_type] [price]")
+            return
+        symbol, long_leg, short_leg, qty = context.args[:4]
+        debit = (context.args[4].lower() if len(context.args) >= 5 else "debit") != "credit"
+        order_type = context.args[5] if len(context.args) >= 6 else "market"
+        price = float(context.args[6]) if len(context.args) >= 7 else None
+        result = await live_execution_service.submit_vertical_spread(symbol.upper(), long_leg.upper(), short_leg.upper(), int(qty), debit=debit, order_type=order_type, price=price)
+        await update.message.reply_text(format_simple_lines("Vertical Spread Result", [str(result)]), parse_mode="HTML")
 
     async def _set_profile_value(update, context):
         if not await _authorize_update(update):
@@ -926,6 +1001,11 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         CommandHandler("profile_exec_status", _profile_exec_status),
         CommandHandler("submit_ladder", _submit_ladder),
         CommandHandler("execute_ladder", _execute_ladder),
+        CommandHandler("submit_exit_ladder", _submit_exit_ladder),
+        CommandHandler("execute_exit_ladder", _execute_exit_ladder),
+        CommandHandler("trigger_trails", _trigger_trails),
+        CommandHandler("option_order", _option_order),
+        CommandHandler("vertical_spread", _vertical_spread),
         CommandHandler("set_profile_exec", _set_profile_value),
         CommandHandler("set_risk_pct", _set_risk_pct),
         CommandHandler("set_atr_multiplier", _set_atr_multiplier),

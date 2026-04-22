@@ -109,6 +109,27 @@ def format_ladder_submission(result: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def format_exit_ladder_submission(result: Mapping[str, Any]) -> str:
+    exits = result.get("exits", [])
+    lines = [
+        "🏁 <b>Exit Ladder Plan</b>",
+        "",
+        f"<b>Symbol:</b> {escape(str(result.get('symbol', 'N/A')))}",
+        f"<b>Mode:</b> {escape(str(result.get('mode', 'N/A')))}",
+        f"<b>Strategy:</b> {escape(str(result.get('strategy', 'N/A')))}",
+        f"<b>Risk / Unit:</b> ${_to_float(result.get('risk_per_unit')):.2f}",
+        "",
+    ]
+    if not exits:
+        lines.append("No exit ladder legs were generated.")
+    else:
+        lines.extend(
+            f"• Step {row.get('step')}: {row.get('action')} {row.get('qty')} @ ${_to_float(row.get('limit_price')):.2f} | RR {row.get('rr_target')}"
+            for row in exits
+        )
+    return "\n".join(lines)
+
+
 def format_ladder_execution_result(result: Mapping[str, Any]) -> str:
     lines = [
         "📤 <b>Ladder Execution Result</b>",
@@ -119,10 +140,32 @@ def format_ladder_execution_result(result: Mapping[str, Any]) -> str:
     ]
     for item in result.get("results", []):
         leg = item.get("leg", {})
+        if item.get("error"):
+            lines.append(
+                f"• Step {leg.get('step')}: {leg.get('side')} {leg.get('qty')} -> ERROR: {escape(str(item.get('error')))}"
+            )
+            continue
         res = item.get("result", {})
         lines.append(
             f"• Step {leg.get('step')}: {leg.get('side')} {leg.get('qty')} @ ${_to_float(leg.get('limit_price')):.2f} -> {escape(str(res.get('status', 'submitted')))}"
         )
+    return "\n".join(lines)
+
+
+def format_triggered_exit_result(result: Mapping[str, Any]) -> str:
+    rows = result.get("results", [])
+    lines = ["🧯 <b>Trailing Exit Execution</b>", "", f"<b>Triggered:</b> {result.get('triggered', 0)}", ""]
+    if not rows:
+        lines.append("No triggered exits were submitted.")
+        return "\n".join(lines)
+    for item in rows:
+        payload = item.get("payload", {})
+        position_id = item.get("position_id", "N/A")
+        if item.get("error"):
+            lines.append(f"• {escape(str(position_id))}: ERROR {escape(str(item['error']))}")
+        else:
+            status = item.get("result", {}).get("status") or item.get("result", {}).get("order", {}).get("status") or "submitted"
+            lines.append(f"• {escape(str(position_id))}: {escape(str(payload.get('side')))} {payload.get('qty')} -> {escape(str(status))}")
     return "\n".join(lines)
 
 
@@ -131,20 +174,33 @@ def format_open_trails(states: Mapping[str, Any]) -> str:
         return "🧷 <b>Open Trail States</b>\n\nNo trailing states stored."
     lines = ["🧷 <b>Open Trail States</b>", ""]
     for position_id, state in states.items():
+        metadata = state.get("metadata") or {}
+        pending = " | exit pending" if metadata.get("exit_submitted") else ""
         lines.append(
-            f"• {escape(str(position_id))}: entry ${_to_float(state.get('entry_price')):.2f}, "
-            f"best ${_to_float(state.get('best_price')):.2f}, stop ${_to_float(state.get('active_stop')):.2f}"
+            f"• {escape(str(position_id))}: {escape(str(state.get('symbol', 'N/A')))} | "
+            f"qty {state.get('quantity', 0)} | best ${_to_float(state.get('best_price')):.2f} | "
+            f"stop ${_to_float(state.get('active_stop')):.2f} | hit={state.get('stop_hit', False)}{pending}"
         )
     return "\n".join(lines)
 
 
 def format_position_sync_result(rows: Mapping[str, Any]) -> str:
+    if not rows:
+        return "🔄 <b>Position Sync Result</b>\n\nNo live positions found."
     lines = ["🔄 <b>Position Sync Result</b>", ""]
     for position_id, state in rows.items():
+        if isinstance(state, dict) and state.get("error"):
+            lines.append(f"• {escape(str(position_id))}: ERROR {escape(str(state.get('error')))}")
+            continue
+        if position_id == "pruned_positions":
+            removed = state.get("removed", []) if isinstance(state, dict) else []
+            lines.append(f"• pruned: {len(removed)} removed")
+            continue
         lines.append(
             f"• {escape(str(position_id))}: {escape(str(state.get('symbol', 'N/A')))} | "
-            f"best ${_to_float(state.get('best_price')):.2f} | stop ${_to_float(state.get('active_stop')):.2f} | "
-            f"stop_hit={state.get('stop_hit', False)}"
+            f"broker {escape(str(state.get('broker', 'n/a')))} | qty {state.get('quantity', 0)} | "
+            f"price ${_to_float(state.get('current_price')):.2f} | stop ${_to_float(state.get('active_stop')):.2f} | "
+            f"hit={state.get('stop_hit', False)}"
         )
     return "\n".join(lines)
 

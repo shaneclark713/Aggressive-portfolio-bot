@@ -92,7 +92,7 @@ async def main() -> None:
     sheets.connect()
 
     execution_router = ExecutionRouter(alpaca_client=alpaca, tradier_client=tradier, config_service=config_service)
-    live_execution_service = LiveExecutionService(settings_repo, execution_router)
+    live_execution_service = LiveExecutionService(settings_repo, execution_router, trailing_stop_service=trailing_stop_service)
     options_chain_ingest_service = OptionsChainIngestService(settings_repo, tradier)
     trailing_stop_service = TrailingStopService(settings_repo)
     position_sync_service = PositionSyncService(trailing_stop_service, alpaca_client=alpaca, tradier_client=tradier)

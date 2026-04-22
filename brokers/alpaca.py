@@ -4,23 +4,24 @@ import aiohttp
 
 
 class AlpacaClient:
-    def __init__(self, api_key: str, secret_key: str, base_url: str):
+    def __init__(self, api_key, secret_key, base_url="https://paper-api.alpaca.markets"):
         self.api_key = api_key or ""
         self.secret_key = secret_key or ""
         self.base_url = (base_url or "https://paper-api.alpaca.markets").rstrip("/")
         self.session: aiohttp.ClientSession | None = None
 
-    async def connect(self) -> None:
+    async def connect(self):
         if self.session is None or self.session.closed:
-            self.session = aiohttp.ClientSession(
-                headers={
-                    "APCA-API-KEY-ID": self.api_key,
-                    "APCA-API-SECRET-KEY": self.secret_key,
-                    "Content-Type": "application/json",
-                }
-            )
+            headers = {
+                "APCA-API-KEY-ID": self.api_key,
+                "APCA-API-SECRET-KEY": self.secret_key,
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            }
+            self.session = aiohttp.ClientSession(headers=headers)
+        return self
 
-    async def close(self) -> None:
+    async def close(self):
         if self.session and not self.session.closed:
             await self.session.close()
         self.session = None
@@ -29,11 +30,11 @@ class AlpacaClient:
         if not self.api_key or not self.secret_key:
             raise RuntimeError("Alpaca API credentials are missing")
         if self.session is None or self.session.closed:
-            raise RuntimeError("Alpaca client is not connected")
+            raise RuntimeError("Alpaca client session is not connected")
 
     def _coerce_side(self, side: str) -> str:
-        normalized = (side or "").strip().lower()
-        if normalized in {"buy", "long"}:
+        normalized = str(side or "buy").lower()
+        if normalized in {"buy", "long", "buy_to_cover"}:
             return "buy"
         if normalized in {"sell", "short", "sell_short"}:
             return "sell"
@@ -55,7 +56,7 @@ class AlpacaClient:
             "symbol": kwargs.get("symbol"),
             "qty": kwargs.get("qty") or kwargs.get("quantity"),
             "side": kwargs.get("side"),
-            "order_type": kwargs.get("order_type") or ("limit" if kwargs.get("limit_price") else "market"),
+            "order_type": kwargs.get("order_type") or ("limit" if kwargs.get("limit_price") not in (None, "") else "market"),
             "limit_price": kwargs.get("limit_price"),
             "stop_price": kwargs.get("stop_price"),
             "time_in_force": kwargs.get("time_in_force", "day"),
@@ -81,20 +82,23 @@ class AlpacaClient:
         if payload_input["client_order_id"]:
             payload["client_order_id"] = str(payload_input["client_order_id"])
 
+        limit_price = payload_input["limit_price"]
+        stop_price = payload_input["stop_price"]
+
         if payload["type"] == "limit":
-            if payload_input["limit_price"] is None:
+            if limit_price in (None, ""):
                 raise ValueError("Limit order requires limit_price")
-            payload["limit_price"] = str(payload_input["limit_price"])
+            payload["limit_price"] = str(limit_price)
 
         if payload["type"] in {"stop", "stop_limit"}:
-            if payload_input["stop_price"] is None:
+            if stop_price in (None, ""):
                 raise ValueError("Stop or stop_limit order requires stop_price")
-            payload["stop_price"] = str(payload_input["stop_price"])
+            payload["stop_price"] = str(stop_price)
 
         if payload["type"] == "stop_limit":
-            if payload_input["limit_price"] is None:
+            if limit_price in (None, ""):
                 raise ValueError("Stop limit order requires limit_price")
-            payload["limit_price"] = str(payload_input["limit_price"])
+            payload["limit_price"] = str(limit_price)
 
         async with self.session.post(f"{self.base_url}/v2/orders", json=payload) as response:
             data = await response.json(content_type=None)
@@ -130,7 +134,7 @@ class AlpacaClient:
                 params["percentage"] = str(percent)
             if quantity is not None:
                 params["qty"] = str(quantity)
-            async with self.session.delete(f"{self.base_url}/v2/positions/{symbol}", params=params) as response:
+            async with self.session.delete(f"{self.base_url}/v2/positions/{str(symbol).upper()}", params=params) as response:
                 data = await response.json(content_type=None)
                 if response.status >= 400:
                     message = data.get("message") if isinstance(data, dict) else str(data)

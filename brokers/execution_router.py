@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Iterable
 
 
 class ExecutionRouter:
@@ -22,7 +22,7 @@ class ExecutionRouter:
         return {"approval_only": "paper", "automated": "live", "alerts_only": "alerts_only"}.get(normalized, normalized)
 
     async def execute(self, trade: Dict[str, Any]):
-        trade_type = str(trade.get("type") or trade.get("instrument_type") or "stock").lower()
+        trade_type = str(trade.get("type") or trade.get("instrument_type") or trade.get("asset_type") or "stock").lower()
         if self._mode() == "alerts_only":
             return {"status": "alerts_only", "trade": trade}
         if trade_type in {"option", "options"} and trade.get("legs"):
@@ -31,19 +31,30 @@ class ExecutionRouter:
             return await self._execute_option(trade)
         return await self._execute_stock(trade)
 
+    async def execute_many(self, trades: Iterable[Dict[str, Any]]) -> list[dict[str, Any]]:
+        results: list[dict[str, Any]] = []
+        for trade in trades:
+            try:
+                results.append({"trade": trade, "result": await self.execute(trade)})
+            except Exception as exc:
+                results.append({"trade": trade, "error": str(exc)})
+        return results
+
     async def _execute_stock(self, trade: Dict[str, Any]):
         if self._mode() == "paper":
             return {"status": "paper", "trade": trade}
         if self.alpaca_client is None:
             raise RuntimeError("Alpaca client is not configured")
 
+        limit_price = trade.get("limit_price")
+        stop_price = trade.get("stop_price")
         payload = {
             "symbol": str(trade["symbol"]).upper(),
             "qty": trade.get("qty", 1),
             "side": trade.get("side", "buy"),
-            "limit_price": trade.get("limit_price"),
-            "stop_price": trade.get("stop_price"),
-            "order_type": trade.get("order_type") or ("limit" if trade.get("limit_price") else "market"),
+            "limit_price": None if limit_price in (None, "") else limit_price,
+            "stop_price": None if stop_price in (None, "") else stop_price,
+            "order_type": trade.get("order_type") or ("limit" if limit_price not in (None, "") else "market"),
             "time_in_force": trade.get("time_in_force", "day"),
             "client_order_id": trade.get("client_order_id") or f"{trade.get('symbol','UNK')}-{trade.get('step','0')}",
         }
@@ -55,7 +66,7 @@ class ExecutionRouter:
         if self.tradier_client is None:
             raise RuntimeError("Tradier client is not configured")
 
-        symbol = trade["symbol"]
+        symbol = str(trade["symbol"]).upper()
         qty = trade.get("qty", trade.get("quantity", 1))
         side = str(trade.get("side", "buy_to_open")).lower()
         option_symbol = trade.get("option_symbol")
@@ -68,9 +79,9 @@ class ExecutionRouter:
             side=side,
             option_symbol=option_symbol,
             order_type=str(trade.get("order_type") or "market").lower(),
-            price=trade.get("price"),
-            stop=trade.get("stop"),
-            duration=str(trade.get("duration") or "day").lower(),
+            price=trade.get("price", trade.get("limit_price")),
+            stop=trade.get("stop", trade.get("stop_price")),
+            duration=trade.get("duration", trade.get("time_in_force", "day")),
         )
 
     async def _execute_multileg_option(self, trade: Dict[str, Any]):
@@ -79,17 +90,11 @@ class ExecutionRouter:
         if self.tradier_client is None:
             raise RuntimeError("Tradier client is not configured")
 
-        symbol = trade["symbol"]
-        legs = list(trade.get("legs", []))
-        quantity = int(trade.get("qty", trade.get("quantity", 1)) or 1)
-        if not legs:
-            raise RuntimeError("Multi-leg option trade missing legs")
-
         return await self.tradier_client.place_multileg_order(
-            symbol=symbol,
-            legs=legs,
-            quantity=quantity,
-            duration=str(trade.get("duration") or "day").lower(),
+            symbol=str(trade["symbol"]).upper(),
+            legs=list(trade.get("legs", [])),
+            quantity=int(trade.get("qty", trade.get("quantity", 1)) or 1),
+            duration=trade.get("duration", trade.get("time_in_force", "day")),
             order_type=str(trade.get("order_type") or "market").lower(),
-            price=trade.get("price"),
+            price=trade.get("price", trade.get("limit_price")),
         )

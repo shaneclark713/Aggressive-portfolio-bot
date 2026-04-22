@@ -85,7 +85,7 @@ class TradierClient:
             "symbol": symbol,
             "option_symbol": option_symbol,
             "side": side,
-            "quantity": qty,
+            "quantity": int(qty),
             "type": order_type,
             "duration": duration,
         }
@@ -105,13 +105,13 @@ class TradierClient:
             "symbol": symbol,
             "duration": duration,
             "type": order_type,
-            "quantity": quantity,
+            "quantity": int(quantity),
         }
         if price is not None:
             data["price"] = price
         for idx, leg in enumerate(list(legs), start=1):
             data[f"option_symbol[{idx}]"] = leg["option_symbol"]
-            data[f"side[{idx}]"] = leg["action"].lower()
+            data[f"side[{idx}]"] = str(leg["action"]).lower()
             data[f"quantity[{idx}]"] = int(leg["quantity"])
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from datetime import date, datetime
-from typing import Any, Dict, Iterable
+from copy import deepcopy
+from typing import Any, Dict, Iterable, Mapping
 
 
 class OptionsService:
@@ -10,41 +10,54 @@ class OptionsService:
         "delta_min": 0.30,
         "delta_max": 0.70,
         "min_open_interest": 1000,
-        "min_daily_volume": 250,
-        "contract_min_price": 0.10,
-        "contract_max_price": 10.0,
+        "contract_min_price": 0.50,
+        "contract_max_price": 8.00,
+        "min_daily_volume": 100,
         "expiry_mode": "weekly",
-        "expiry_value": 1,
+        "expiry_count": 1,
         "chain_symbol": "SPY",
     }
 
-    def __init__(self, settings_repo):
+    def __init__(self, settings_repo, config_service=None):
         self.settings_repo = settings_repo
+        self.config_service = config_service
 
-    def _normalize(self, payload: Dict[str, Any] | None) -> Dict[str, Any]:
-        payload = dict(payload or {})
-        if "expiry_mode" not in payload:
-            legacy = str(payload.get("expiry_preference") or "weekly").lower().strip()
-            payload["expiry_mode"] = "0dte" if legacy == "nearest" else legacy
-        if "expiry_value" not in payload:
-            payload["expiry_value"] = 0 if payload.get("expiry_mode") == "0dte" else 1
-        merged = dict(self.DEFAULTS)
-        merged.update(payload)
-        merged["expiry_mode"] = str(merged.get("expiry_mode") or "weekly").lower().strip()
-        if merged["expiry_mode"] not in {"0dte", "weekly", "monthly"}:
-            merged["expiry_mode"] = "weekly"
-        merged["expiry_value"] = 0 if merged["expiry_mode"] == "0dte" else max(int(merged.get("expiry_value", 1) or 1), 1)
-        return merged
+    def _normalize_expiry(self, settings: Mapping[str, Any]) -> Dict[str, Any]:
+        current = deepcopy(dict(settings))
+        expiry_mode = str(current.get("expiry_mode", current.get("expiry_preference", "weekly")) or "weekly").strip().lower()
+        expiry_count = int(current.get("expiry_count", 1) or 0)
+
+        if expiry_mode == "nearest":
+            expiry_mode = "0dte"
+            expiry_count = 0
+        elif expiry_mode == "any":
+            expiry_mode = "weekly"
+        elif expiry_mode == "0dte":
+            expiry_count = 0
+        else:
+            expiry_count = max(expiry_count, 1)
+
+        current["expiry_mode"] = expiry_mode
+        current["expiry_count"] = expiry_count
+        return current
 
     def get_settings(self) -> Dict[str, Any]:
-        stored = self.settings_repo.get("options_settings", {}) or {}
-        return self._normalize(stored)
+        merged = deepcopy(self.DEFAULTS)
+        if hasattr(self.settings_repo, "get_options_settings"):
+            merged.update(self.settings_repo.get_options_settings())
+        else:
+            stored = self.settings_repo.get("options_settings", {}) or {}
+            merged.update(stored)
+        return self._normalize_expiry(merged)
 
     def update_settings(self, **updates) -> Dict[str, Any]:
         current = self.get_settings()
         current.update(updates)
-        current = self._normalize(current)
-        self.settings_repo.set("options_settings", current)
+        current = self._normalize_expiry(current)
+        if hasattr(self.settings_repo, "set_options_settings"):
+            self.settings_repo.set_options_settings(current)
+        else:
+            self.settings_repo.set("options_settings", current)
         return current
 
     def toggle_enabled(self, enabled: bool = True) -> Dict[str, Any]:
@@ -60,59 +73,54 @@ class OptionsService:
             raise ValueError("Open interest must be non-negative")
         return self.update_settings(min_open_interest=int(value))
 
-    def set_expiry(self, mode: str, value: int | None = None) -> Dict[str, Any]:
-        mode = str(mode or "weekly").lower().strip()
+    def set_contract_price_range(self, min_price: float, max_price: float) -> Dict[str, Any]:
+        if min_price < 0 or max_price <= 0 or min_price > max_price:
+            raise ValueError("Contract price range is invalid")
+        return self.update_settings(contract_min_price=round(min_price, 2), contract_max_price=round(max_price, 2))
+
+    def set_min_daily_volume(self, value: int) -> Dict[str, Any]:
+        if value < 0:
+            raise ValueError("Min daily volume must be non-negative")
+        return self.update_settings(min_daily_volume=int(value))
+
+    def set_expiry(self, mode: str, count: int | None = None) -> Dict[str, Any]:
+        mode = str(mode).strip().lower()
         if mode not in {"0dte", "weekly", "monthly"}:
-            raise ValueError("Expiry must be 0dte, weekly, or monthly")
-        if mode == "0dte":
-            value = 0
-        else:
-            value = max(int(value or 1), 1)
-        return self.update_settings(expiry_mode=mode, expiry_value=value)
+            raise ValueError("Expiry mode must be 0dte, weekly, or monthly")
+        count = 0 if mode == "0dte" else max(int(count or 1), 1)
+        return self.update_settings(expiry_mode=mode, expiry_count=count)
 
-    def set_expiry_preference(self, value: str) -> Dict[str, Any]:
-        mode = "0dte" if str(value).lower().strip() == "nearest" else str(value).lower().strip()
-        return self.set_expiry(mode, 1 if mode in {"weekly", "monthly"} else 0)
-
-    def _days_to_expiry(self, contract: dict) -> int | None:
-        raw = contract.get("days_to_expiry")
-        if raw is not None:
+    @staticmethod
+    def _contract_price(contract: Mapping[str, Any]) -> float:
+        for key in ("mark", "last", "ask", "bid"):
             try:
-                return int(raw)
-            except Exception:
-                pass
-        expiry = contract.get("expiry") or contract.get("expiration_date")
-        if not expiry:
-            return None
-        text = str(expiry)
-        for fmt in ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S%z"):
-            try:
-                parsed = datetime.strptime(text, fmt)
-                return (parsed.date() - date.today()).days
+                value = contract.get(key)
+                if value is not None and float(value) > 0:
+                    return float(value)
             except Exception:
                 continue
-        try:
-            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-            return (parsed.date() - date.today()).days
-        except Exception:
-            return None
+        return 0.0
 
-    def _matches_expiry(self, contract: dict, settings: Dict[str, Any]) -> bool:
-        mode = settings.get("expiry_mode", "weekly")
-        value = int(settings.get("expiry_value", 1) or 1)
-        days = self._days_to_expiry(contract)
-        if days is None:
-            return True
+    @staticmethod
+    def _matches_expiry(contract: Mapping[str, Any], settings: Mapping[str, Any]) -> bool:
+        mode = str(settings.get("expiry_mode", "weekly")).lower()
+        count = int(settings.get("expiry_count", 1) or 0)
+        dte = contract.get("days_to_expiry")
+        try:
+            dte_val = int(dte)
+        except Exception:
+            return mode != "0dte"
+
         if mode == "0dte":
-            return days <= 0
+            return dte_val == 0
         if mode == "weekly":
-            lower = 0 if value <= 1 else 7 * (value - 1) + 1
-            upper = 7 * value
-            return lower <= days <= upper
+            low = max((count - 1) * 7 + 1, 1)
+            high = count * 7
+            return low <= dte_val <= high
         if mode == "monthly":
-            lower = 0 if value <= 1 else 30 * (value - 1) + 1
-            upper = 31 * value
-            return lower <= days <= upper
+            low = max((count - 1) * 30 + 1, 1)
+            high = count * 31
+            return low <= dte_val <= high
         return True
 
     def filter_contracts(self, contracts: Iterable[dict]) -> list[dict]:
@@ -120,13 +128,11 @@ class OptionsService:
         filtered = []
 
         for contract in contracts or []:
-            delta = contract.get("delta")
-            oi = int(contract.get("open_interest", 0) or 0)
-            volume = int(contract.get("volume", 0) or 0)
-            mark = float(contract.get("mark", 0) or 0)
-
             try:
-                delta_value = abs(float(delta))
+                delta_value = abs(float(contract.get("delta", 0) or 0))
+                oi = int(contract.get("open_interest", 0) or 0)
+                volume = int(contract.get("volume", 0) or 0)
+                price = self._contract_price(contract)
             except Exception:
                 continue
 
@@ -136,9 +142,7 @@ class OptionsService:
                 continue
             if volume < settings["min_daily_volume"]:
                 continue
-            if mark < float(settings["contract_min_price"]):
-                continue
-            if mark > float(settings["contract_max_price"]):
+            if price < settings["contract_min_price"] or price > settings["contract_max_price"]:
                 continue
             if not self._matches_expiry(contract, settings):
                 continue

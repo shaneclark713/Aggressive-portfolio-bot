@@ -17,11 +17,10 @@ class OptionsChainIngestService:
 
     def _extract_delta(self, row: dict[str, Any]) -> float:
         greeks = row.get("greeks") or {}
-        for key in ("delta",):
-            if row.get(key) is not None:
-                return float(row.get(key) or 0)
-            if greeks.get(key) is not None:
-                return float(greeks.get(key) or 0)
+        if row.get("delta") is not None:
+            return float(row.get("delta") or 0)
+        if greeks.get("delta") is not None:
+            return float(greeks.get("delta") or 0)
         return 0.0
 
     def _extract_iv(self, row: dict[str, Any]) -> float:
@@ -33,7 +32,7 @@ class OptionsChainIngestService:
                 return float(greeks.get(key) or 0)
         return 0.0
 
-    def _normalize_tradier_rows(self, symbol: str, rows: list[dict[str, Any]], expiry_type: str = "any") -> list[dict[str, Any]]:
+    def _normalize_tradier_rows(self, symbol: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         payloads: list[dict[str, Any]] = []
         for row in rows or []:
             payloads.append(
@@ -49,8 +48,8 @@ class OptionsChainIngestService:
                     "volume": row.get("volume") or 0,
                     "bid": row.get("bid") or 0,
                     "ask": row.get("ask") or 0,
+                    "last": row.get("last") or row.get("last_price") or 0,
                     "mark": row.get("mark") or 0,
-                    "expiry_type": row.get("expiry_type") or expiry_type,
                 }
             )
         return self.chain_service.normalize_contracts(symbol, payloads)
@@ -71,6 +70,7 @@ class OptionsChainIngestService:
                     "premium": round(float(item.get("open_interest", 0) or 0) * float(item.get("mark", 0) or 0) * 100, 2),
                     "open_interest": item.get("open_interest", 0),
                     "mark": item.get("mark", 0),
+                    "days_to_expiry": item.get("days_to_expiry"),
                 }
             )
         return flows

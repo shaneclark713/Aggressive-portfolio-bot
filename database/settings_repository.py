@@ -1,8 +1,67 @@
 import json
+from copy import deepcopy
 from typing import Any, Dict, Optional
 
 
 class SettingsRepository:
+    DEFAULT_DAY_TRADE_EXECUTION = {
+        "risk_pct": 0.01,
+        "atr_multiplier": 1.0,
+        "position_mode": "auto",
+        "take_profit_pct": 0.20,
+        "stop_loss_pct": 0.08,
+        "max_concurrent_positions": 3,
+        "time_of_day_restrictor": "15:00",
+        "max_spread_pct": 0.03,
+        "min_volume": 500_000,
+        "max_slippage_pct": 0.02,
+        "ladder_steps": 3,
+        "ladder_spacing_pct": 0.01,
+        "trail_type": "percent",
+        "trail_value": 0.02,
+    }
+
+    DEFAULT_SWING_TRADE_EXECUTION = {
+        "risk_pct": 0.01,
+        "atr_multiplier": 1.5,
+        "position_mode": "auto",
+        "take_profit_pct": 0.35,
+        "stop_loss_pct": 0.12,
+        "max_concurrent_positions": 5,
+        "time_of_day_restrictor": "15:30",
+        "max_spread_pct": 0.05,
+        "min_volume": 250_000,
+        "max_slippage_pct": 0.03,
+        "ladder_steps": 2,
+        "ladder_spacing_pct": 0.02,
+        "trail_type": "percent",
+        "trail_value": 0.04,
+    }
+
+    DEFAULT_OPTIONS_SETTINGS = {
+        "enabled": False,
+        "delta_min": 0.30,
+        "delta_max": 0.70,
+        "min_open_interest": 1000,
+        "contract_min_price": 0.50,
+        "contract_max_price": 8.00,
+        "min_daily_volume": 100,
+        "expiry_mode": "weekly",
+        "expiry_count": 1,
+        "chain_symbol": "SPY",
+    }
+
+    EXECUTION_SCOPE_ALIASES = {
+        "day": "day_trade",
+        "day_trade": "day_trade",
+        "daytrade": "day_trade",
+        "intraday": "day_trade",
+        "swing": "swing_trade",
+        "swing_trade": "swing_trade",
+        "swingtrade": "swing_trade",
+        "overnight": "swing_trade",
+    }
+
     def __init__(self, conn):
         self.conn = conn
         self._ensure_tables()
@@ -82,6 +141,80 @@ class SettingsRepository:
 
     def set_execution_mode(self, mode: str) -> None:
         self.set("execution_mode", mode)
+
+    def normalize_execution_scope(self, scope: str | None) -> str:
+        raw = str(scope or "day_trade").strip().lower()
+        return self.EXECUTION_SCOPE_ALIASES.get(raw, "day_trade")
+
+    def _execution_defaults(self, scope: str) -> Dict[str, Any]:
+        return deepcopy(
+            self.DEFAULT_DAY_TRADE_EXECUTION
+            if self.normalize_execution_scope(scope) == "day_trade"
+            else self.DEFAULT_SWING_TRADE_EXECUTION
+        )
+
+    def get_execution_settings(self, scope: str | None = None) -> Dict[str, Any]:
+        if scope is None:
+            return {
+                "day_trade": self.get_execution_settings("day_trade"),
+                "swing_trade": self.get_execution_settings("swing_trade"),
+            }
+
+        normalized_scope = self.normalize_execution_scope(scope)
+        defaults = self._execution_defaults(normalized_scope)
+
+        legacy = self.get("execution_settings", {}) or {}
+        stored = self.get(f"execution_settings.{normalized_scope}", {}) or {}
+
+        merged = defaults
+        if isinstance(legacy, dict):
+            merged.update(legacy)
+        if isinstance(stored, dict):
+            merged.update(stored)
+        return merged
+
+    def set_execution_settings(self, scope: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        normalized_scope = self.normalize_execution_scope(scope)
+        merged = self._execution_defaults(normalized_scope)
+        merged.update(payload or {})
+        self.set(f"execution_settings.{normalized_scope}", merged)
+        return merged
+
+    def update_execution_settings(self, scope: str, **updates: Any) -> Dict[str, Any]:
+        current = self.get_execution_settings(scope)
+        current.update(updates)
+        return self.set_execution_settings(scope, current)
+
+    def get_options_settings(self) -> Dict[str, Any]:
+        legacy = self.get("options_settings", {}) or {}
+        merged = deepcopy(self.DEFAULT_OPTIONS_SETTINGS)
+        if isinstance(legacy, dict):
+            merged.update(legacy)
+
+        expiry_pref = str(merged.pop("expiry_preference", merged.get("expiry_mode", "weekly")) or "weekly").strip().lower()
+        expiry_count = merged.get("expiry_count", 1)
+        if expiry_pref == "nearest":
+            expiry_pref = "0dte"
+            expiry_count = 0
+        if expiry_pref == "any":
+            expiry_pref = "weekly"
+        merged["expiry_mode"] = expiry_pref
+        merged["expiry_count"] = int(expiry_count or 0)
+        return merged
+
+    def set_options_settings(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        merged = deepcopy(self.DEFAULT_OPTIONS_SETTINGS)
+        merged.update(payload or {})
+        if str(merged.get("expiry_mode", "")).lower() == "nearest":
+            merged["expiry_mode"] = "0dte"
+            merged["expiry_count"] = 0
+        self.set("options_settings", merged)
+        return merged
+
+    def update_options_settings(self, **updates: Any) -> Dict[str, Any]:
+        current = self.get_options_settings()
+        current.update(updates)
+        return self.set_options_settings(current)
 
     def get_strategy_states(self) -> Dict[str, bool]:
         cursor = self.conn.cursor()

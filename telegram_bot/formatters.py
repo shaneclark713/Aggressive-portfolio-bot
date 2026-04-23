@@ -4,6 +4,12 @@ from html import escape
 from typing import Any, Mapping, Sequence
 
 
+EXECUTION_STYLE_LABELS = {
+    "day_trade": "Day Trade",
+    "swing_trade": "Swing Trade",
+}
+
+
 def _to_float(value: Any, default: float = 0.0) -> float:
     try:
         return float(value)
@@ -16,6 +22,22 @@ def _fmt_pct(value: Any, digits: int = 2) -> str:
     if abs(num) <= 1.0:
         return f"{num * 100:.{digits}f}%"
     return f"{num:.{digits}f}%"
+
+
+def _execution_style_title(value: str | None) -> str:
+    return EXECUTION_STYLE_LABELS.get(str(value or "day_trade"), str(value or "day_trade").replace("_", " ").title())
+
+
+def _format_expiry(settings: Mapping[str, Any]) -> str:
+    mode = str(settings.get("expiry_mode", "weekly")).lower()
+    value = int(settings.get("expiry_value", 0) or 0)
+    if mode == "0dte":
+        return "0DTE"
+    if mode == "weekly":
+        return f"{value} week{'s' if value != 1 else ''} out"
+    if mode == "monthly":
+        return f"{value} month{'s' if value != 1 else ''} out"
+    return escape(str(mode))
 
 
 def format_daily_report(title: str, sections: Mapping[str, Sequence[str]]) -> str:
@@ -96,9 +118,13 @@ def format_ladder_submission(result: Mapping[str, Any]) -> str:
         f"<b>Symbol:</b> {escape(str(result.get('symbol', 'N/A')))}",
         f"<b>Mode:</b> {escape(str(result.get('mode', 'N/A')))}",
         f"<b>Strategy:</b> {escape(str(result.get('strategy', 'N/A')))}",
+    ]
+    if result.get("execution_profile"):
+        lines.append(f"<b>Execution Style:</b> {escape(_execution_style_title(result.get('execution_profile')))}")
+    lines.extend([
         f"<b>Ladder Steps:</b> {profile.get('ladder_steps', len(entries))}",
         "",
-    ]
+    ])
     if not entries:
         lines.append("No ladder entries were generated.")
     else:
@@ -117,9 +143,13 @@ def format_exit_ladder_submission(result: Mapping[str, Any]) -> str:
         f"<b>Symbol:</b> {escape(str(result.get('symbol', 'N/A')))}",
         f"<b>Mode:</b> {escape(str(result.get('mode', 'N/A')))}",
         f"<b>Strategy:</b> {escape(str(result.get('strategy', 'N/A')))}",
+    ]
+    if result.get("execution_profile"):
+        lines.append(f"<b>Execution Style:</b> {escape(_execution_style_title(result.get('execution_profile')))}")
+    lines.extend([
         f"<b>Risk / Unit:</b> ${_to_float(result.get('risk_per_unit')):.2f}",
         "",
-    ]
+    ])
     if not exits:
         lines.append("No exit ladder legs were generated.")
     else:
@@ -207,25 +237,32 @@ def format_position_sync_result(rows: Mapping[str, Any]) -> str:
 
 def format_options_settings(settings: Mapping[str, Any]) -> str:
     return (
-        "🧾 <b>Options Settings</b>\n\n"
+        "🧾 <b>Option Filters</b>\n\n"
         f"<b>Enabled:</b> {settings.get('enabled')}\n"
         f"<b>Delta Min:</b> {settings.get('delta_min')}\n"
         f"<b>Delta Max:</b> {settings.get('delta_max')}\n"
         f"<b>Min Open Interest:</b> {settings.get('min_open_interest')}\n"
-        f"<b>Expiry Preference:</b> {settings.get('expiry_preference')}\n"
+        f"<b>Min Daily Volume:</b> {settings.get('min_daily_volume')}\n"
+        f"<b>Contract Min Price:</b> ${_to_float(settings.get('contract_min_price')):.2f}\n"
+        f"<b>Contract Max Price:</b> ${_to_float(settings.get('contract_max_price')):.2f}\n"
+        f"<b>Expiry:</b> {_format_expiry(settings)}\n"
         f"<b>Chain Symbol:</b> {escape(str(settings.get('chain_symbol', 'N/A')))}"
     )
 
 
-def format_execution_settings(settings: Mapping[str, Any]) -> str:
+def format_execution_settings(settings: Mapping[str, Any], style: str = "day_trade") -> str:
     return (
-        "🛡 <b>Execution Settings</b>\n\n"
+        f"🛡 <b>Execution Settings — {_execution_style_title(style)}</b>\n\n"
         f"<b>Risk %:</b> {_fmt_pct(settings.get('risk_pct', 0.01))}\n"
         f"<b>ATR Multiplier:</b> {settings.get('atr_multiplier', 1.0)}\n"
-        f"<b>Position Mode:</b> {settings.get('position_mode', 'auto')}\n"
+        f"<b>Take Profit:</b> {_fmt_pct(settings.get('take_profit', 0.05))}\n"
+        f"<b>Stop Loss:</b> {_fmt_pct(settings.get('stop_loss', 0.02))}\n"
+        f"<b>Position Mode:</b> {escape(str(settings.get('position_mode', 'auto')))}\n"
         f"<b>Max Spread %:</b> {_fmt_pct(settings.get('max_spread_pct', 0.03))}\n"
         f"<b>Min Volume:</b> {settings.get('min_volume', 500000)}\n"
         f"<b>Max Slippage %:</b> {_fmt_pct(settings.get('max_slippage_pct', 0.02))}\n"
+        f"<b>Max Concurrent Positions:</b> {settings.get('max_concurrent_positions', 3)}\n"
+        f"<b>Entry Cutoff:</b> {escape(str(settings.get('entry_cutoff_time', '15:00')))}\n"
         f"<b>Ladder Steps:</b> {settings.get('ladder_steps', 3)}\n"
         f"<b>Ladder Spacing %:</b> {_fmt_pct(settings.get('ladder_spacing_pct', 0.01))}\n"
         f"<b>Trail Type:</b> {escape(str(settings.get('trail_type', 'percent')))}\n"
@@ -233,38 +270,42 @@ def format_execution_settings(settings: Mapping[str, Any]) -> str:
     )
 
 
-def format_execution_risk_settings(settings: Mapping[str, Any]) -> str:
+def format_execution_risk_settings(settings: Mapping[str, Any], style: str = "day_trade") -> str:
     return (
-        "🎯 <b>Risk Settings</b>\n\n"
+        f"🎯 <b>Risk Settings — {_execution_style_title(style)}</b>\n\n"
         f"<b>Risk %:</b> {_fmt_pct(settings.get('risk_pct', 0.01))}\n"
         f"<b>ATR Multiplier:</b> {settings.get('atr_multiplier', 1.0)}\n"
+        f"<b>Take Profit:</b> {_fmt_pct(settings.get('take_profit', 0.05))}\n"
+        f"<b>Stop Loss:</b> {_fmt_pct(settings.get('stop_loss', 0.02))}\n"
         f"<b>Position Mode:</b> {escape(str(settings.get('position_mode', 'auto')))}"
     )
 
 
-def format_execution_safeguards(settings: Mapping[str, Any]) -> str:
+def format_execution_safeguards(settings: Mapping[str, Any], style: str = "day_trade") -> str:
     return (
-        "🛡 <b>Safeguards</b>\n\n"
+        f"🛡 <b>Safeguards — {_execution_style_title(style)}</b>\n\n"
         f"<b>Max Spread %:</b> {_fmt_pct(settings.get('max_spread_pct', 0.03))}\n"
         f"<b>Min Volume:</b> {settings.get('min_volume', 500000)}\n"
-        f"<b>Max Slippage %:</b> {_fmt_pct(settings.get('max_slippage_pct', 0.02))}"
+        f"<b>Max Slippage %:</b> {_fmt_pct(settings.get('max_slippage_pct', 0.02))}\n"
+        f"<b>Max Concurrent Positions:</b> {settings.get('max_concurrent_positions', 3)}\n"
+        f"<b>Entry Cutoff:</b> {escape(str(settings.get('entry_cutoff_time', '15:00')))}"
     )
 
 
-def format_execution_ladder(settings: Mapping[str, Any]) -> str:
+def format_execution_ladder(settings: Mapping[str, Any], style: str = "day_trade") -> str:
     return (
-        "🪜 <b>Entry Ladder</b>\n\n"
+        f"🪜 <b>Entry Ladder — {_execution_style_title(style)}</b>\n\n"
         f"<b>Ladder Steps:</b> {settings.get('ladder_steps', 3)}\n"
         f"<b>Ladder Spacing %:</b> {_fmt_pct(settings.get('ladder_spacing_pct', 0.01))}"
     )
 
 
-def format_execution_trailing(settings: Mapping[str, Any]) -> str:
+def format_execution_trailing(settings: Mapping[str, Any], style: str = "day_trade") -> str:
     trail_type = str(settings.get('trail_type', 'percent'))
     value = settings.get('trail_value', 0.02)
     shown = _fmt_pct(value) if trail_type == 'percent' else escape(str(value))
     return (
-        "📌 <b>Trailing Stop</b>\n\n"
+        f"📌 <b>Trailing Stop — {_execution_style_title(style)}</b>\n\n"
         f"<b>Trail Type:</b> {escape(trail_type)}\n"
         f"<b>Trail Value:</b> {shown}"
     )

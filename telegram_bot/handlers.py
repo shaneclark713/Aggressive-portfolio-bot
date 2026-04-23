@@ -30,9 +30,8 @@ from .keyboards import (
     build_filter_profile_menu_keyboard,
     build_ml_menu_keyboard,
     build_mode_keyboard,
-    build_options_edit_keyboard,
     build_options_expiry_keyboard,
-    build_options_menu_keyboard,
+    build_options_filters_keyboard,
     build_position_mode_keyboard,
     build_presets_keyboard,
     build_scan_menu_keyboard,
@@ -67,10 +66,20 @@ PENDING_EXEC_EDIT = "pending_execution_edit"
 PENDING_OPTIONS_EDIT = "pending_options_edit"
 PENDING_EXEC_PROFILE_EDIT = "pending_exec_profile_edit"
 
-PERCENT_FIELDS = {"risk_pct", "max_spread_pct", "max_slippage_pct", "ladder_spacing_pct", "trail_value"}
-INT_FIELDS = {"ladder_steps", "min_volume", "min_open_interest"}
-FLOAT_FIELDS = {"atr_multiplier", "delta_min", "delta_max"}
-STR_FIELDS = {"position_mode", "trail_type", "expiry_preference", "chain_symbol"}
+PERCENT_FIELDS = {
+    "risk_pct",
+    "max_spread_pct",
+    "max_slippage_pct",
+    "ladder_spacing_pct",
+    "trail_value",
+    "take_profit",
+    "stop_loss",
+}
+INT_FIELDS = {"ladder_steps", "min_volume", "min_open_interest", "min_daily_volume", "max_concurrent_positions", "expiry_value"}
+FLOAT_FIELDS = {"atr_multiplier", "delta_min", "delta_max", "contract_min_price", "contract_max_price"}
+STR_FIELDS = {"position_mode", "trail_type", "expiry_mode", "chain_symbol", "entry_cutoff_time"}
+EXECUTION_STYLE_FIELDS = {"day_trade", "swing_trade"}
+DEFAULT_EXECUTION_STYLE = "day_trade"
 
 
 def _meta_key(name: str) -> str:
@@ -198,44 +207,104 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         settings_repo.set_filter_override(_meta_key(name), json.dumps(payload))
         return payload
 
-    def _get_execution_settings() -> dict:
-        return _get_ui_settings(
-            "execution_settings",
-            {
-                "risk_pct": 0.01,
-                "atr_multiplier": 1.0,
-                "position_mode": "auto",
-                "max_spread_pct": 0.03,
-                "min_volume": 500000,
-                "max_slippage_pct": 0.02,
-                "ladder_steps": 3,
-                "ladder_spacing_pct": 0.01,
-                "trail_type": "percent",
-                "trail_value": 0.02,
+    def _normalize_execution_settings(raw: dict | None) -> dict:
+        defaults = {
+            "risk_pct": 0.01,
+            "atr_multiplier": 1.0,
+            "position_mode": "auto",
+            "take_profit": 0.05,
+            "stop_loss": 0.02,
+            "max_spread_pct": 0.03,
+            "min_volume": 500000,
+            "max_slippage_pct": 0.02,
+            "max_concurrent_positions": 3,
+            "entry_cutoff_time": "15:00",
+            "ladder_steps": 3,
+            "ladder_spacing_pct": 0.01,
+            "trail_type": "percent",
+            "trail_value": 0.02,
+        }
+        raw = dict(raw or {})
+        if "profiles" in raw:
+            profiles = raw.get("profiles") or {}
+            return {
+                "active_profile": raw.get("active_profile") or DEFAULT_EXECUTION_STYLE,
+                "profiles": {
+                    "day_trade": {**defaults, **dict(profiles.get("day_trade") or {})},
+                    "swing_trade": {**defaults, **dict(profiles.get("swing_trade") or {})},
+                },
+            }
+        legacy = {k: raw[k] for k in raw.keys() if k in defaults}
+        return {
+            "active_profile": raw.get("active_profile") or DEFAULT_EXECUTION_STYLE,
+            "profiles": {
+                "day_trade": {**defaults, **legacy},
+                "swing_trade": {**defaults, **legacy},
             },
-        )
+        }
 
-    def _update_execution_settings(**updates) -> dict:
-        current = _get_execution_settings()
-        current.update(updates)
-        return _set_ui_settings("execution_settings", current)
+    def _get_execution_settings_blob() -> dict:
+        return _normalize_execution_settings(_get_ui_settings("execution_settings", {}))
+
+    def _get_active_execution_style() -> str:
+        return _get_execution_settings_blob().get("active_profile", DEFAULT_EXECUTION_STYLE)
+
+    def _set_active_execution_style(style: str) -> None:
+        style = style if style in EXECUTION_STYLE_FIELDS else DEFAULT_EXECUTION_STYLE
+        blob = _get_execution_settings_blob()
+        blob["active_profile"] = style
+        _set_ui_settings("execution_settings", blob)
+
+    def _get_execution_settings(style: str | None = None) -> dict:
+        blob = _get_execution_settings_blob()
+        active = style or blob.get("active_profile", DEFAULT_EXECUTION_STYLE)
+        return dict(blob["profiles"].get(active, blob["profiles"][DEFAULT_EXECUTION_STYLE]))
+
+    def _update_execution_settings(style: str | None = None, **updates) -> dict:
+        blob = _get_execution_settings_blob()
+        active = style or blob.get("active_profile", DEFAULT_EXECUTION_STYLE)
+        existing = dict(blob["profiles"].get(active, {}))
+        existing.update(updates)
+        blob["profiles"][active] = existing
+        blob["active_profile"] = active
+        _set_ui_settings("execution_settings", blob)
+        return dict(existing)
+
+    def _normalize_options_settings(raw: dict | None) -> dict:
+        defaults = {
+            "enabled": False,
+            "delta_min": 0.30,
+            "delta_max": 0.70,
+            "min_open_interest": 1000,
+            "min_daily_volume": 250,
+            "contract_min_price": 0.10,
+            "contract_max_price": 10.0,
+            "expiry_mode": "weekly",
+            "expiry_value": 1,
+            "chain_symbol": "SPY",
+        }
+        raw = dict(raw or {})
+        if "expiry_mode" not in raw:
+            legacy_pref = str(raw.get("expiry_preference") or "weekly").lower()
+            if legacy_pref == "nearest":
+                legacy_pref = "0dte"
+            raw["expiry_mode"] = legacy_pref if legacy_pref in {"0dte", "weekly", "monthly"} else "weekly"
+        if "expiry_value" not in raw:
+            raw["expiry_value"] = 0 if raw.get("expiry_mode") == "0dte" else 1
+        merged = {**defaults, **raw}
+        if merged["expiry_mode"] == "0dte":
+            merged["expiry_value"] = 0
+        else:
+            merged["expiry_value"] = max(int(merged.get("expiry_value", 1) or 1), 1)
+        return merged
 
     def _get_options_settings() -> dict:
-        return _get_ui_settings(
-            "options_settings",
-            {
-                "enabled": False,
-                "delta_min": 0.30,
-                "delta_max": 0.70,
-                "min_open_interest": 1000,
-                "expiry_preference": "weekly",
-                "chain_symbol": "SPY",
-            },
-        )
+        return _normalize_options_settings(_get_ui_settings("options_settings", {}))
 
     def _update_options_settings(**updates) -> dict:
         current = _get_options_settings()
         current.update(updates)
+        current = _normalize_options_settings(current)
         return _set_ui_settings("options_settings", current)
 
     def _get_ml_weights() -> dict:
@@ -264,6 +333,21 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
             if text.endswith("%"):
                 return float(text[:-1]) / 100.0
             return float(text)
+        if field == "entry_cutoff_time":
+            text = raw.strip()
+            parts = text.split(":")
+            if len(parts) != 2:
+                raise ValueError("Time must look like HH:MM")
+            hour = int(parts[0])
+            minute = int(parts[1])
+            if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+                raise ValueError("Time must look like HH:MM")
+            return f"{hour:02d}:{minute:02d}"
+        if field == "expiry_mode":
+            value = raw.strip().lower()
+            if value not in {"0dte", "weekly", "monthly"}:
+                raise ValueError("Expiry mode must be 0dte, weekly, or monthly")
+            return value
         if field in STR_FIELDS:
             return raw.strip()
         return raw.strip()
@@ -280,43 +364,45 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         return True
 
     async def _show_execution_root(query):
-        settings = _get_execution_settings()
+        style = _get_active_execution_style()
+        settings = _get_execution_settings(style)
         await query.edit_message_text(
-            format_execution_settings(settings),
+            format_execution_settings(settings, style),
             parse_mode="HTML",
-            reply_markup=build_execution_menu_keyboard(),
+            reply_markup=build_execution_menu_keyboard(style),
         )
 
     async def _show_execution_section(query, section: str):
-        settings = _get_execution_settings()
+        style = _get_active_execution_style()
+        settings = _get_execution_settings(style)
         if section == "risk":
-            text = format_execution_risk_settings(settings)
-            markup = build_execution_risk_keyboard(settings)
+            text = format_execution_risk_settings(settings, style)
+            markup = build_execution_risk_keyboard(settings, style)
         elif section == "safeguards":
-            text = format_execution_safeguards(settings)
-            markup = build_execution_safeguards_keyboard(settings)
+            text = format_execution_safeguards(settings, style)
+            markup = build_execution_safeguards_keyboard(settings, style)
         elif section == "ladder":
-            text = format_execution_ladder(settings)
-            markup = build_execution_ladder_keyboard(settings)
+            text = format_execution_ladder(settings, style)
+            markup = build_execution_ladder_keyboard(settings, style)
         else:
-            text = format_execution_trailing(settings)
-            markup = build_execution_trailing_keyboard(settings)
+            text = format_execution_trailing(settings, style)
+            markup = build_execution_trailing_keyboard(settings, style)
         await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
 
-    async def _show_options_root(query):
-        settings = _get_options_settings()
+    async def _show_presets_root(query):
+        profile = config_service.get_active_filter_profile()
+        current = config_service.get_profile_preset(profile)
         await query.edit_message_text(
-            format_options_settings(settings),
-            parse_mode="HTML",
-            reply_markup=build_options_menu_keyboard(settings),
+            f"Presets for {profile.title()}",
+            reply_markup=build_presets_keyboard(config_service.get_available_presets(), current, _get_options_settings()),
         )
 
-    async def _show_options_edit(query):
+    async def _show_option_filters(query):
         settings = _get_options_settings()
         await query.edit_message_text(
             format_options_settings(settings),
             parse_mode="HTML",
-            reply_markup=build_options_edit_keyboard(settings),
+            reply_markup=build_options_filters_keyboard(settings),
         )
 
     async def _show_filters_root(query):
@@ -521,28 +607,43 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         if not await _authorize_update(update):
             return
         if not context.args:
-            await update.message.reply_text("Usage: /set_risk_pct <value or percent>")
+            await update.message.reply_text("Usage: /set_risk_pct [day_trade|swing_trade] <value or percent>")
             return
-        settings = _update_execution_settings(risk_pct=_parse_decimal_or_percent(context.args[0]))
-        await update.message.reply_text(format_execution_risk_settings(settings), parse_mode="HTML")
+        args = list(context.args)
+        style = _get_active_execution_style()
+        if len(args) >= 2 and args[0] in EXECUTION_STYLE_FIELDS:
+            style = args.pop(0)
+        _set_active_execution_style(style)
+        settings = _update_execution_settings(style, risk_pct=_parse_decimal_or_percent(args[0]))
+        await update.message.reply_text(format_execution_risk_settings(settings, style), parse_mode="HTML")
 
     async def _set_atr_multiplier(update, context):
         if not await _authorize_update(update):
             return
         if not context.args:
-            await update.message.reply_text("Usage: /set_atr_multiplier <value>")
+            await update.message.reply_text("Usage: /set_atr_multiplier [day_trade|swing_trade] <value>")
             return
-        settings = _update_execution_settings(atr_multiplier=float(_clean_number(context.args[0])))
-        await update.message.reply_text(format_execution_risk_settings(settings), parse_mode="HTML")
+        args = list(context.args)
+        style = _get_active_execution_style()
+        if len(args) >= 2 and args[0] in EXECUTION_STYLE_FIELDS:
+            style = args.pop(0)
+        _set_active_execution_style(style)
+        settings = _update_execution_settings(style, atr_multiplier=float(_clean_number(args[0])))
+        await update.message.reply_text(format_execution_risk_settings(settings, style), parse_mode="HTML")
 
     async def _set_position_mode(update, context):
         if not await _authorize_update(update):
             return
         if not context.args:
-            await update.message.reply_text("Usage: /set_position_mode <auto|stock|options>")
+            await update.message.reply_text("Usage: /set_position_mode [day_trade|swing_trade] <auto|stock|options>")
             return
-        settings = _update_execution_settings(position_mode=context.args[0].strip().lower())
-        await update.message.reply_text(format_execution_risk_settings(settings), parse_mode="HTML")
+        args = list(context.args)
+        style = _get_active_execution_style()
+        if len(args) >= 2 and args[0] in EXECUTION_STYLE_FIELDS:
+            style = args.pop(0)
+        _set_active_execution_style(style)
+        settings = _update_execution_settings(style, position_mode=args[0].strip().lower())
+        await update.message.reply_text(format_execution_risk_settings(settings, style), parse_mode="HTML")
 
     async def _options_on(update, context):
         if not await _authorize_update(update):
@@ -575,9 +676,14 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         if not await _authorize_update(update):
             return
         if not context.args:
-            await update.message.reply_text("Usage: /set_expiry <weekly|monthly|nearest>")
+            await update.message.reply_text("Usage: /set_expiry <0dte|weekly|monthly> [value]")
             return
-        settings = _update_options_settings(expiry_preference=context.args[0].strip().lower())
+        mode = context.args[0].strip().lower()
+        if mode not in {"0dte", "weekly", "monthly"}:
+            await update.message.reply_text("Expiry must be 0dte, weekly, or monthly")
+            return
+        value = 0 if mode == "0dte" else int(_clean_number(context.args[1])) if len(context.args) >= 2 else 1
+        settings = _update_options_settings(expiry_mode=mode, expiry_value=value)
         await update.message.reply_text(format_options_settings(settings), parse_mode="HTML")
 
     async def _set_ml_weight(update, context):
@@ -616,17 +722,18 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         if pending:
             field = pending["field"]
             section = pending["section"]
+            style = pending.get("style") or _get_active_execution_style()
             try:
                 value = _parse_exec_or_options_value(field, update.message.text or "")
-                settings = _update_execution_settings(**{field: value})
+                settings = _update_execution_settings(style, **{field: value})
                 if section == "risk":
-                    await update.message.reply_text(format_execution_risk_settings(settings), parse_mode="HTML", reply_markup=build_execution_risk_keyboard(settings))
+                    await update.message.reply_text(format_execution_risk_settings(settings, style), parse_mode="HTML", reply_markup=build_execution_risk_keyboard(settings, style))
                 elif section == "safeguards":
-                    await update.message.reply_text(format_execution_safeguards(settings), parse_mode="HTML", reply_markup=build_execution_safeguards_keyboard(settings))
+                    await update.message.reply_text(format_execution_safeguards(settings, style), parse_mode="HTML", reply_markup=build_execution_safeguards_keyboard(settings, style))
                 elif section == "ladder":
-                    await update.message.reply_text(format_execution_ladder(settings), parse_mode="HTML", reply_markup=build_execution_ladder_keyboard(settings))
+                    await update.message.reply_text(format_execution_ladder(settings, style), parse_mode="HTML", reply_markup=build_execution_ladder_keyboard(settings, style))
                 else:
-                    await update.message.reply_text(format_execution_trailing(settings), parse_mode="HTML", reply_markup=build_execution_trailing_keyboard(settings))
+                    await update.message.reply_text(format_execution_trailing(settings, style), parse_mode="HTML", reply_markup=build_execution_trailing_keyboard(settings, style))
             except Exception as exc:
                 context.user_data[PENDING_EXEC_EDIT] = pending
                 await update.message.reply_text(f"Could not save execution value: {exc}")
@@ -637,8 +744,11 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
             field = pending["field"]
             try:
                 value = _parse_exec_or_options_value(field, update.message.text or "")
-                settings = _update_options_settings(**{field: value})
-                await update.message.reply_text(format_options_settings(settings), parse_mode="HTML", reply_markup=build_options_edit_keyboard(settings))
+                if field == "expiry_mode" and value == "0dte":
+                    settings = _update_options_settings(expiry_mode=value, expiry_value=0)
+                else:
+                    settings = _update_options_settings(**{field: value})
+                await update.message.reply_text(format_options_settings(settings), parse_mode="HTML", reply_markup=build_options_filters_keyboard(settings))
             except Exception as exc:
                 context.user_data[PENDING_OPTIONS_EDIT] = pending
                 await update.message.reply_text(f"Could not save options value: {exc}")
@@ -683,12 +793,7 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
             return
         if data == "cp|presets":
             _clear_pending(context)
-            profile = config_service.get_active_filter_profile()
-            current = config_service.get_profile_preset(profile)
-            await query.edit_message_text(
-                f"Presets for {profile.title()}",
-                reply_markup=build_presets_keyboard(config_service.get_available_presets(), current),
-            )
+            await _show_presets_root(query)
             return
         if data == "cp|mode":
             _clear_pending(context)
@@ -705,10 +810,6 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         if data == "cp|execution_menu":
             _clear_pending(context)
             await _show_execution_root(query)
-            return
-        if data == "cp|options_menu":
-            _clear_pending(context)
-            await _show_options_root(query)
             return
         if data == "cp|ml_menu":
             _clear_pending(context)
@@ -799,7 +900,7 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
             config_service.set_profile_preset(profile, preset)
             await query.edit_message_text(
                 f"Presets for {profile.title()}",
-                reply_markup=build_presets_keyboard(config_service.get_available_presets(), config_service.get_profile_preset(profile)),
+                reply_markup=build_presets_keyboard(config_service.get_available_presets(), config_service.get_profile_preset(profile), _get_options_settings()),
             )
             return
         if data.startswith("set|mode|"):
@@ -851,7 +952,34 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
             await _show_filter_category(query, profile, category)
             return
 
+        if data == "foptions|show":
+            _clear_pending(context)
+            await _show_option_filters(query)
+            return
+        if data.startswith("foptedit|"):
+            _clear_pending(context)
+            field = data.split("|", 1)[1]
+            context.user_data[PENDING_OPTIONS_EDIT] = {"field": field}
+            await query.message.reply_text(f"Send new value for options.{field}\nUse /cancel to stop.")
+            return
+        if data == "foptchoice|expiry_mode":
+            _clear_pending(context)
+            await query.edit_message_text("Select expiry mode", reply_markup=build_options_expiry_keyboard(_get_options_settings().get("expiry_mode", "weekly")))
+            return
+        if data.startswith("foptset|expiry_mode|"):
+            _clear_pending(context)
+            value = data.split("|", 2)[2]
+            settings = _update_options_settings(expiry_mode=value, expiry_value=0 if value == "0dte" else max(int(_get_options_settings().get("expiry_value", 1) or 1), 1))
+            await query.edit_message_text(format_options_settings(settings), parse_mode="HTML", reply_markup=build_options_filters_keyboard(settings))
+            return
+
         # execution sections
+        if data.startswith("execprof|"):
+            _clear_pending(context)
+            style = data.split("|", 1)[1]
+            _set_active_execution_style(style)
+            await _show_execution_root(query)
+            return
         if data in {"exec|show", "exec|risk", "exec|safeguards", "exec|ladder", "exec|trailing"}:
             _clear_pending(context)
             section = data.split("|", 1)[1]
@@ -862,8 +990,8 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         if data.startswith("execedit|"):
             _clear_pending(context)
             _, section, field = data.split("|", 2)
-            context.user_data[PENDING_EXEC_EDIT] = {"section": section, "field": field}
-            await query.message.reply_text(f"Send new value for execution.{field}\nUse /cancel to stop.")
+            context.user_data[PENDING_EXEC_EDIT] = {"section": section, "field": field, "style": _get_active_execution_style()}
+            await query.message.reply_text(f"Send new value for {_get_active_execution_style()}.{field}\nUse /cancel to stop.")
             return
         if data == "execchoice|position_mode":
             _clear_pending(context)
@@ -876,79 +1004,65 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         if data.startswith("execset|position_mode|"):
             _clear_pending(context)
             value = data.split("|", 2)[2]
-            _update_execution_settings(position_mode=value)
+            _update_execution_settings(_get_active_execution_style(), position_mode=value)
             await _show_execution_section(query, "risk")
             return
         if data.startswith("execset|trail_type|"):
             _clear_pending(context)
             value = data.split("|", 2)[2]
-            _update_execution_settings(trail_type=value)
+            _update_execution_settings(_get_active_execution_style(), trail_type=value)
             await _show_execution_section(query, "trailing")
             return
         if data == "exec|submit_ladder":
             _clear_pending(context)
             if live_execution_service is None:
-                await query.edit_message_text("Live execution service not configured.", reply_markup=build_execution_menu_keyboard())
+                await query.edit_message_text("Live execution service not configured.", reply_markup=build_execution_menu_keyboard(_get_active_execution_style()))
                 return
-            plan = await live_execution_service.submit_stock_ladder("SPY", "LONG", 120, 10.0, config_service.get_execution_mode(), "breakout_box")
-            await query.edit_message_text(format_ladder_submission(plan), parse_mode="HTML", reply_markup=build_execution_menu_keyboard())
+            plan = await live_execution_service.submit_stock_ladder("SPY", "LONG", 120, 10.0, config_service.get_execution_mode(), "breakout_box", trade_style=_get_active_execution_style())
+            await query.edit_message_text(format_ladder_submission(plan), parse_mode="HTML", reply_markup=build_execution_menu_keyboard(_get_active_execution_style()))
             return
         if data == "exec|open_trails":
             _clear_pending(context)
-            await query.edit_message_text(format_open_trails(trailing_stop_service.list_positions()), parse_mode="HTML", reply_markup=build_execution_menu_keyboard())
+            await query.edit_message_text(format_open_trails(trailing_stop_service.list_positions()), parse_mode="HTML", reply_markup=build_execution_menu_keyboard(_get_active_execution_style()))
             return
 
-        # options
-        if data.startswith("opt|"):
+        # preset / options utilities
+        if data.startswith("preset|"):
             action = data.split("|", 1)[1]
             settings = _get_options_settings()
-            if action == "toggle":
+            if action == "options_toggle":
                 _clear_pending(context)
-                settings = _update_options_settings(enabled=not settings.get("enabled", False))
-                await query.edit_message_text(format_options_settings(settings), parse_mode="HTML", reply_markup=build_options_menu_keyboard(settings))
-                return
-            if action == "show":
-                _clear_pending(context)
-                await _show_options_edit(query)
-                return
-            if action == "iv":
-                _clear_pending(context)
-                await query.edit_message_text(format_iv_status(iv_analyzer.summarize_chain(_get_option_chain_rows())), parse_mode="HTML", reply_markup=build_options_menu_keyboard(settings))
-                return
-            if action == "flow":
-                _clear_pending(context)
-                await query.edit_message_text(format_flow_status(flow_analyzer.summarize(_get_options_flow_rows())), parse_mode="HTML", reply_markup=build_options_menu_keyboard(settings))
+                _update_options_settings(enabled=not settings.get("enabled", False))
+                await _show_presets_root(query)
                 return
             if action == "chain":
                 _clear_pending(context)
-                await query.edit_message_text(format_chain_summary(chain_service.summarize_chain(_get_option_chain_rows())), parse_mode="HTML", reply_markup=build_options_menu_keyboard(settings))
+                await query.edit_message_text(format_chain_summary(chain_service.summarize_chain(_get_option_chain_rows())), parse_mode="HTML", reply_markup=build_presets_keyboard(config_service.get_available_presets(), config_service.get_profile_preset(config_service.get_active_filter_profile()), _get_options_settings()))
+                return
+            if action == "iv":
+                _clear_pending(context)
+                await query.edit_message_text(format_iv_status(iv_analyzer.summarize_chain(_get_option_chain_rows())), parse_mode="HTML", reply_markup=build_presets_keyboard(config_service.get_available_presets(), config_service.get_profile_preset(config_service.get_active_filter_profile()), _get_options_settings()))
+                return
+            if action == "flow":
+                _clear_pending(context)
+                await query.edit_message_text(format_flow_status(flow_analyzer.summarize(_get_options_flow_rows())), parse_mode="HTML", reply_markup=build_presets_keyboard(config_service.get_available_presets(), config_service.get_profile_preset(config_service.get_active_filter_profile()), _get_options_settings()))
                 return
             if action == "refresh_chain":
                 _clear_pending(context)
                 symbol = settings.get("chain_symbol", "SPY")
                 if app_services.get("tradier_client") is None:
-                    await query.edit_message_text("Tradier client not configured.", reply_markup=build_options_menu_keyboard(settings))
+                    await query.edit_message_text("Tradier client not configured.", reply_markup=build_presets_keyboard(config_service.get_available_presets(), config_service.get_profile_preset(config_service.get_active_filter_profile()), settings))
                     return
                 payload = await options_chain_ingest.refresh_chain(symbol)
-                await query.edit_message_text(format_chain_summary(payload["summary"]), parse_mode="HTML", reply_markup=build_options_menu_keyboard(settings))
+                await query.edit_message_text(format_chain_summary(payload["summary"]), parse_mode="HTML", reply_markup=build_presets_keyboard(config_service.get_available_presets(), config_service.get_profile_preset(config_service.get_active_filter_profile()), _get_options_settings()))
                 return
-        if data.startswith("optedit|"):
-            _clear_pending(context)
-            field = data.split("|", 1)[1]
-            context.user_data[PENDING_OPTIONS_EDIT] = {"field": field}
-            await query.message.reply_text(f"Send new value for options.{field}\nUse /cancel to stop.")
-            return
-        if data == "optchoice|expiry_preference":
-            _clear_pending(context)
-            await query.edit_message_text("Select expiry preference", reply_markup=build_options_expiry_keyboard(_get_options_settings().get("expiry_preference", "weekly")))
-            return
-        if data.startswith("optset|expiry_preference|"):
-            _clear_pending(context)
-            value = data.split("|", 2)[2]
-            _update_options_settings(expiry_preference=value)
-            await _show_options_edit(query)
-            return
+            if action == "edit_chain_symbol":
+                _clear_pending(context)
+                context.user_data[PENDING_OPTIONS_EDIT] = {"field": "chain_symbol"}
+                await query.message.reply_text("Send new value for options.chain_symbol\nUse /cancel to stop.")
+                return
 
+        # ml callbacks
         # ml callbacks
         if data == "ml|show":
             _clear_pending(context)

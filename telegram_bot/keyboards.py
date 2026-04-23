@@ -4,6 +4,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 VALID_FILTER_CATEGORIES = ("descriptive", "fundamental", "technical")
 FILTER_PROFILES = ("overall", "premarket", "midday", "overnight")
+EXECUTION_STYLES = (("day_trade", "Day Trade"), ("swing_trade", "Swing Trade"))
 
 
 def _pretty_name(value: str) -> str:
@@ -18,6 +19,13 @@ def _display_value(value) -> str:
 
 def _truncate_label(label: str, max_len: int = 46) -> str:
     return label if len(label) <= max_len else label[: max_len - 3] + "..."
+
+
+def _execution_style_rows(active_style: str) -> list[list[InlineKeyboardButton]]:
+    return [[
+        InlineKeyboardButton(f"{'✅ ' if active_style == value else ''}{label}", callback_data=f"execprof|{value}")
+        for value, label in EXECUTION_STYLES
+    ]]
 
 
 def build_trade_keyboard(trade_id: str) -> InlineKeyboardMarkup:
@@ -46,10 +54,7 @@ def build_control_panel_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton("Execution", callback_data="cp|execution_menu"),
             ],
             [
-                InlineKeyboardButton("Options", callback_data="cp|options_menu"),
                 InlineKeyboardButton("ML", callback_data="cp|ml_menu"),
-            ],
-            [
                 InlineKeyboardButton("Exec Profiles", callback_data="cp|exec_profiles"),
             ],
         ]
@@ -70,8 +75,9 @@ def build_scan_menu_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def build_execution_menu_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
+def build_execution_menu_keyboard(active_style: str) -> InlineKeyboardMarkup:
+    rows = _execution_style_rows(active_style)
+    rows.extend(
         [
             [InlineKeyboardButton("Risk Settings", callback_data="exec|risk"), InlineKeyboardButton("Safeguards", callback_data="exec|safeguards")],
             [InlineKeyboardButton("Entry Ladder", callback_data="exec|ladder"), InlineKeyboardButton("Trailing Stop", callback_data="exec|trailing")],
@@ -79,32 +85,42 @@ def build_execution_menu_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton("⬅ Back", callback_data="cp|back")],
         ]
     )
+    return InlineKeyboardMarkup(rows)
 
 
-def build_execution_risk_keyboard(settings: dict) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
+def build_execution_risk_keyboard(settings: dict, active_style: str) -> InlineKeyboardMarkup:
+    rows = _execution_style_rows(active_style)
+    rows.extend(
         [
             [InlineKeyboardButton(f"Risk %: {_display_value(settings.get('risk_pct'))}", callback_data="execedit|risk|risk_pct")],
             [InlineKeyboardButton(f"ATR Multiplier: {_display_value(settings.get('atr_multiplier'))}", callback_data="execedit|risk|atr_multiplier")],
+            [InlineKeyboardButton(f"Take Profit: {_display_value(settings.get('take_profit'))}", callback_data="execedit|risk|take_profit")],
+            [InlineKeyboardButton(f"Stop Loss: {_display_value(settings.get('stop_loss'))}", callback_data="execedit|risk|stop_loss")],
             [InlineKeyboardButton(f"Position Mode: {_pretty_name(str(settings.get('position_mode', 'auto')))}", callback_data="execchoice|position_mode")],
             [InlineKeyboardButton("⬅ Back", callback_data="cp|execution_menu")],
         ]
     )
+    return InlineKeyboardMarkup(rows)
 
 
-def build_execution_safeguards_keyboard(settings: dict) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
+def build_execution_safeguards_keyboard(settings: dict, active_style: str) -> InlineKeyboardMarkup:
+    rows = _execution_style_rows(active_style)
+    rows.extend(
         [
             [InlineKeyboardButton(f"Max Spread %: {_display_value(settings.get('max_spread_pct'))}", callback_data="execedit|safeguards|max_spread_pct")],
             [InlineKeyboardButton(f"Min Volume: {_display_value(settings.get('min_volume'))}", callback_data="execedit|safeguards|min_volume")],
             [InlineKeyboardButton(f"Max Slippage %: {_display_value(settings.get('max_slippage_pct'))}", callback_data="execedit|safeguards|max_slippage_pct")],
+            [InlineKeyboardButton(f"Max Concurrent: {_display_value(settings.get('max_concurrent_positions'))}", callback_data="execedit|safeguards|max_concurrent_positions")],
+            [InlineKeyboardButton(f"Entry Cutoff: {_display_value(settings.get('entry_cutoff_time'))}", callback_data="execedit|safeguards|entry_cutoff_time")],
             [InlineKeyboardButton("⬅ Back", callback_data="cp|execution_menu")],
         ]
     )
+    return InlineKeyboardMarkup(rows)
 
 
-def build_execution_ladder_keyboard(settings: dict) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
+def build_execution_ladder_keyboard(settings: dict, active_style: str) -> InlineKeyboardMarkup:
+    rows = _execution_style_rows(active_style)
+    rows.extend(
         [
             [InlineKeyboardButton(f"Ladder Steps: {_display_value(settings.get('ladder_steps'))}", callback_data="execedit|ladder|ladder_steps")],
             [InlineKeyboardButton(f"Ladder Spacing %: {_display_value(settings.get('ladder_spacing_pct'))}", callback_data="execedit|ladder|ladder_spacing_pct")],
@@ -112,10 +128,12 @@ def build_execution_ladder_keyboard(settings: dict) -> InlineKeyboardMarkup:
             [InlineKeyboardButton("⬅ Back", callback_data="cp|execution_menu")],
         ]
     )
+    return InlineKeyboardMarkup(rows)
 
 
-def build_execution_trailing_keyboard(settings: dict) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
+def build_execution_trailing_keyboard(settings: dict, active_style: str) -> InlineKeyboardMarkup:
+    rows = _execution_style_rows(active_style)
+    rows.extend(
         [
             [InlineKeyboardButton(f"Trail Type: {_pretty_name(str(settings.get('trail_type', 'percent')))}", callback_data="execchoice|trail_type")],
             [InlineKeyboardButton(f"Trail Value: {_display_value(settings.get('trail_value'))}", callback_data="execedit|trailing|trail_value")],
@@ -123,6 +141,7 @@ def build_execution_trailing_keyboard(settings: dict) -> InlineKeyboardMarkup:
             [InlineKeyboardButton("⬅ Back", callback_data="cp|execution_menu")],
         ]
     )
+    return InlineKeyboardMarkup(rows)
 
 
 def build_position_mode_keyboard(current: str) -> InlineKeyboardMarkup:
@@ -139,39 +158,28 @@ def build_trail_type_keyboard(current: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-def build_options_menu_keyboard(options_settings: dict) -> InlineKeyboardMarkup:
-    enabled_text = "🟢 Options ON" if options_settings.get("enabled") else "⚪ Options OFF"
-    return InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton(enabled_text, callback_data="opt|toggle")],
-            [InlineKeyboardButton("Edit Filters", callback_data="opt|show"), InlineKeyboardButton("Chain Summary", callback_data="opt|chain")],
-            [InlineKeyboardButton("IV Status", callback_data="opt|iv"), InlineKeyboardButton("Flow Status", callback_data="opt|flow")],
-            [InlineKeyboardButton("Refresh Chain", callback_data="opt|refresh_chain"), InlineKeyboardButton("⬅ Back", callback_data="cp|back")],
-        ]
-    )
-
-
-def build_options_edit_keyboard(settings: dict) -> InlineKeyboardMarkup:
-    delta_min = settings.get("delta_min")
-    delta_max = settings.get("delta_max")
-    min_oi = settings.get("min_open_interest")
-    expiry = _pretty_name(str(settings.get("expiry_preference", "weekly")))
-    chain_symbol = str(settings.get("chain_symbol", "SPY"))
+def build_options_filters_keyboard(settings: dict) -> InlineKeyboardMarkup:
+    expiry_mode = _pretty_name(str(settings.get("expiry_mode", "weekly")))
+    expiry_value = settings.get("expiry_value", 1)
     rows = [
-        [InlineKeyboardButton(f"Delta Min: {delta_min}", callback_data="optedit|delta_min")],
-        [InlineKeyboardButton(f"Delta Max: {delta_max}", callback_data="optedit|delta_max")],
-        [InlineKeyboardButton(f"Min OI: {min_oi}", callback_data="optedit|min_open_interest")],
-        [InlineKeyboardButton(f"Expiry: {expiry}", callback_data="optchoice|expiry_preference")],
-        [InlineKeyboardButton(f"Chain Symbol: {chain_symbol}", callback_data="optedit|chain_symbol")],
-        [InlineKeyboardButton("⬅ Back", callback_data="cp|options_menu")],
+        [InlineKeyboardButton(f"Delta Min: {settings.get('delta_min')}", callback_data="foptedit|delta_min")],
+        [InlineKeyboardButton(f"Delta Max: {settings.get('delta_max')}", callback_data="foptedit|delta_max")],
+        [InlineKeyboardButton(f"Min OI: {settings.get('min_open_interest')}", callback_data="foptedit|min_open_interest")],
+        [InlineKeyboardButton(f"Min Daily Volume: {settings.get('min_daily_volume')}", callback_data="foptedit|min_daily_volume")],
+        [InlineKeyboardButton(f"Contract Min Price: {settings.get('contract_min_price')}", callback_data="foptedit|contract_min_price")],
+        [InlineKeyboardButton(f"Contract Max Price: {settings.get('contract_max_price')}", callback_data="foptedit|contract_max_price")],
+        [InlineKeyboardButton(f"Expiry Type: {expiry_mode}", callback_data="foptchoice|expiry_mode")],
+        [InlineKeyboardButton(f"Expiry Value: {expiry_value}", callback_data="foptedit|expiry_value")],
+        [InlineKeyboardButton(f"Chain Symbol: {settings.get('chain_symbol', 'SPY')}", callback_data="foptedit|chain_symbol")],
+        [InlineKeyboardButton("⬅ Back", callback_data="cp|filters")],
     ]
     return InlineKeyboardMarkup(rows)
 
 
 def build_options_expiry_keyboard(current: str) -> InlineKeyboardMarkup:
-    values = [("weekly", "Weekly"), ("monthly", "Monthly"), ("nearest", "Nearest")]
-    rows = [[InlineKeyboardButton(f"{'✅ ' if current == value else ''}{label}", callback_data=f"optset|expiry_preference|{value}")] for value, label in values]
-    rows.append([InlineKeyboardButton("⬅ Back", callback_data="opt|show")])
+    values = [("0dte", "0DTE"), ("weekly", "Weekly"), ("monthly", "Monthly")]
+    rows = [[InlineKeyboardButton(f"{'✅ ' if current == value else ''}{label}", callback_data=f"foptset|expiry_mode|{value}")] for value, label in values]
+    rows.append([InlineKeyboardButton("⬅ Back", callback_data="foptions|show")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -204,9 +212,19 @@ def build_execution_profile_edit_keyboard(mode: str, strategy: str) -> InlineKey
     return InlineKeyboardMarkup(rows)
 
 
-def build_presets_keyboard(presets: list[str], current: str) -> InlineKeyboardMarkup:
+def build_presets_keyboard(presets: list[str], current: str, options_settings: dict) -> InlineKeyboardMarkup:
     rows = [[InlineKeyboardButton(f"{'✅ ' if name == current else ''}{_pretty_name(name)}", callback_data=f"set|preset|{name}")] for name in presets]
-    rows.append([InlineKeyboardButton("⬅ Back", callback_data="cp|back")])
+    enabled_text = "🟢 Options ON" if options_settings.get("enabled") else "⚪ Options OFF"
+    chain_symbol = str(options_settings.get("chain_symbol", "SPY"))
+    rows.extend(
+        [
+            [InlineKeyboardButton(enabled_text, callback_data="preset|options_toggle")],
+            [InlineKeyboardButton(f"Chain Symbol: {chain_symbol}", callback_data="preset|edit_chain_symbol")],
+            [InlineKeyboardButton("Chain Summary", callback_data="preset|chain"), InlineKeyboardButton("Refresh Chain", callback_data="preset|refresh_chain")],
+            [InlineKeyboardButton("IV Status", callback_data="preset|iv"), InlineKeyboardButton("Flow Status", callback_data="preset|flow")],
+            [InlineKeyboardButton("⬅ Back", callback_data="cp|back")],
+        ]
+    )
     return InlineKeyboardMarkup(rows)
 
 
@@ -225,6 +243,7 @@ def build_strategies_keyboard(states: dict[str, bool]) -> InlineKeyboardMarkup:
 
 def build_filter_profile_menu_keyboard(profile_preset_map: dict[str, str], active_profile: str) -> InlineKeyboardMarkup:
     rows = [[InlineKeyboardButton(f"{'✅ ' if profile == active_profile else ''}{_pretty_name(profile)} ({_pretty_name(profile_preset_map.get(profile, ''))})", callback_data=f"fprofile|{profile}")] for profile in FILTER_PROFILES]
+    rows.append([InlineKeyboardButton("Option Filters", callback_data="foptions|show")])
     rows.append([InlineKeyboardButton("♻ Reset All Filters", callback_data="freset|all")])
     rows.append([InlineKeyboardButton("⬅ Back", callback_data="cp|back")])
     return InlineKeyboardMarkup(rows)

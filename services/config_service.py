@@ -8,64 +8,23 @@ from config.filter_presets import FILTER_PRESETS
 
 class ConfigService:
     VALID_FILTER_CATEGORIES = ("descriptive", "fundamental", "technical")
-    FILTER_PROFILES = ("overall", "premarket", "midday", "overnight")
-    DEFAULT_PROFILE_PRESETS = {
-        "overall": "day_trade_momentum",
-        "premarket": "premarket_gap_focus",
-        "midday": "midday_trend",
-        "overnight": "overnight_catalyst",
-    }
 
     def __init__(self, settings_repo, settings):
         self.settings_repo = settings_repo
         self.settings = settings
         self.default_execution_mode = getattr(settings, "bot_default_execution_mode", "alerts_only")
 
-    def _meta_key(self, key: str) -> str:
-        return f"__meta__.{key}"
-
-    def _get_overrides(self) -> Dict[str, Any]:
-        return self.settings_repo.get_filter_overrides()
-
     def get_available_presets(self) -> List[str]:
         return list(FILTER_PRESETS.keys())
 
-    def get_filter_profiles(self) -> List[str]:
-        return list(self.FILTER_PROFILES)
-
     def get_active_preset(self) -> str:
-        return self.get_profile_preset("overall")
+        preset = self.settings_repo.get_active_preset()
+        return preset if preset in FILTER_PRESETS else next(iter(FILTER_PRESETS.keys()))
 
     def set_active_preset(self, preset_name: str) -> None:
-        self.set_profile_preset("overall", preset_name)
-
-    def get_active_filter_profile(self) -> str:
-        overrides = self._get_overrides()
-        value = overrides.get(self._meta_key("active_filter_profile"), "overall")
-        return value if value in self.FILTER_PROFILES else "overall"
-
-    def set_active_filter_profile(self, profile: str) -> None:
-        if profile not in self.FILTER_PROFILES:
-            raise ValueError(f"Unknown filter profile: {profile}")
-        self.settings_repo.set_filter_override(self._meta_key("active_filter_profile"), profile)
-
-    def get_profile_preset(self, profile: str) -> str:
-        if profile not in self.FILTER_PROFILES:
-            raise ValueError(f"Unknown filter profile: {profile}")
-        overrides = self._get_overrides()
-        key = self._meta_key(f"profile_preset.{profile}")
-        value = overrides.get(key, self.DEFAULT_PROFILE_PRESETS[profile])
-        return value if value in FILTER_PRESETS else self.DEFAULT_PROFILE_PRESETS[profile]
-
-    def set_profile_preset(self, profile: str, preset_name: str) -> None:
-        if profile not in self.FILTER_PROFILES:
-            raise ValueError(f"Unknown filter profile: {profile}")
         if preset_name not in FILTER_PRESETS:
             raise ValueError(f"Unknown preset: {preset_name}")
-        self.settings_repo.set_filter_override(self._meta_key(f"profile_preset.{profile}"), preset_name)
-
-    def get_profile_preset_map(self) -> Dict[str, str]:
-        return {profile: self.get_profile_preset(profile) for profile in self.FILTER_PROFILES}
+        self.settings_repo.set_active_preset(preset_name)
 
     def get_execution_mode(self) -> str:
         return self.settings_repo.get_execution_mode() or self.default_execution_mode
@@ -88,35 +47,14 @@ class ConfigService:
     def list_filter_categories(self) -> Iterable[str]:
         return self.VALID_FILTER_CATEGORIES
 
-    def resolve_filters(self, profile: str | None = None) -> Dict[str, Dict[str, Any]]:
-        profile = profile or self.get_active_filter_profile()
-        if profile not in self.FILTER_PROFILES:
-            raise ValueError(f"Unknown filter profile: {profile}")
-
-        preset_name = self.get_profile_preset(profile)
-        preset = deepcopy(FILTER_PRESETS[preset_name])
-        overrides = self._get_overrides()
+    def resolve_filters(self) -> Dict[str, Dict[str, Any]]:
+        preset = deepcopy(FILTER_PRESETS[self.get_active_preset()])
+        overrides = self.settings_repo.get_filter_overrides()
 
         for override_key, override_value in overrides.items():
-            if override_key.startswith("__meta__."):
+            if "." not in override_key:
                 continue
-
-            target_profile = None
-            category_field = override_key
-
-            if override_key.count(".") >= 2:
-                profile_candidate, maybe_category, _rest = override_key.split(".", 2)
-                if profile_candidate in self.FILTER_PROFILES and maybe_category in self.VALID_FILTER_CATEGORIES:
-                    target_profile = profile_candidate
-                    category_field = override_key[len(profile_candidate) + 1:]
-
-            if target_profile is not None and target_profile != profile:
-                continue
-
-            if "." not in category_field:
-                continue
-
-            category, field = category_field.split(".", 1)
+            category, field = override_key.split(".", 1)
             category = category.lower()
             if category not in self.VALID_FILTER_CATEGORIES:
                 continue
@@ -126,64 +64,54 @@ class ConfigService:
 
         return {category: preset.get(category, {}) for category in self.VALID_FILTER_CATEGORIES}
 
-    def get_filter_category(self, category: str, profile: str | None = None) -> Dict[str, Any]:
+    def get_filter_category(self, category: str) -> Dict[str, Any]:
         category = category.lower()
         self._ensure_valid_category(category)
-        return self.resolve_filters(profile).get(category, {})
+        return self.resolve_filters().get(category, {})
 
-    def get_filter_fields(self, category: str, profile: str | None = None) -> Dict[str, Any]:
-        return self.get_filter_category(category, profile)
+    def get_filter_fields(self, category: str) -> Dict[str, Any]:
+        return self.get_filter_category(category)
 
-    def get_filter_value(self, category: str, field: str, profile: str | None = None) -> Any:
+    def get_filter_value(self, category: str, field: str) -> Any:
         category = category.lower()
         self._ensure_valid_category(category)
-        filters = self.resolve_filters(profile)
+        filters = self.resolve_filters()
         if field not in filters.get(category, {}):
             raise ValueError(f"Unknown filter field: {category}.{field}")
         return filters[category][field]
 
-    def set_filter_value(self, category: str, field: str, raw_value: str, profile: str | None = None) -> Any:
-        profile = profile or self.get_active_filter_profile()
-        if profile not in self.FILTER_PROFILES:
-            raise ValueError(f"Unknown filter profile: {profile}")
+    def set_filter_value(self, category: str, field: str, raw_value: str) -> Any:
         category = category.lower()
         self._ensure_valid_category(category)
-        filters = self.resolve_filters(profile)
+        filters = self.resolve_filters()
         if field not in filters[category]:
             raise ValueError(f"Unknown filter field: {category}.{field}")
 
         current_value = filters[category][field]
         parsed_value = self._coerce_value(raw_value, current_value)
         self._validate_filter_value(category, field, parsed_value)
-        self.settings_repo.set_filter_override(f"{profile}.{category}.{field}", parsed_value)
+        self.settings_repo.set_filter_override(f"{category}.{field}", parsed_value)
         return parsed_value
 
-    def reset_filter_category(self, category: str, profile: str | None = None) -> None:
-        profile = profile or self.get_active_filter_profile()
-        if profile not in self.FILTER_PROFILES:
-            raise ValueError(f"Unknown filter profile: {profile}")
+    def reset_filter_category(self, category: str) -> None:
         category = category.lower()
         self._ensure_valid_category(category)
-        overrides = self._get_overrides()
-        prefix = f"{profile}.{category}."
+        overrides = self.settings_repo.get_filter_overrides()
+        prefix = f"{category}."
         for override_key in list(overrides.keys()):
             if override_key.startswith(prefix):
                 self.settings_repo.clear_filter_override(override_key)
 
-    def reset_filter_overrides(self, category: str | None = None, profile: str | None = None) -> None:
-        profile = profile or self.get_active_filter_profile()
-        if category is not None:
-            self.reset_filter_category(category, profile=profile)
-            return
-        overrides = self._get_overrides()
-        prefix = f"{profile}."
-        for override_key in list(overrides.keys()):
-            if override_key.startswith(prefix):
+    def reset_filter_overrides(self, category: str | None = None) -> None:
+        if category is None:
+            overrides = self.settings_repo.get_filter_overrides()
+            for override_key in list(overrides.keys()):
                 self.settings_repo.clear_filter_override(override_key)
+            return
+        self.reset_filter_category(category)
 
     def reset_all_filter_overrides(self) -> None:
-        for profile in self.FILTER_PROFILES:
-            self.reset_filter_overrides(profile=profile)
+        self.reset_filter_overrides()
 
     def _ensure_valid_category(self, category: str) -> None:
         if category not in self.VALID_FILTER_CATEGORIES:
@@ -210,28 +138,9 @@ class ConfigService:
         if field.endswith("_min") or field.endswith("_max"):
             if isinstance(value, (int, float)) and value < 0:
                 raise ValueError(f"{field} must be non-negative")
-        positive_only = {
-            "price_max",
-            "avg_daily_volume_min",
-            "avg_dollar_volume_min",
-            "relative_strength_lookback_minutes",
-            "minimum_rr_ratio",
-            "volume_vs_average_min_ratio",
-            "max_float",
-            "shortlist_cap",
-        }
-        if field in positive_only and isinstance(value, (int, float)) and value <= 0:
-            raise ValueError(f"{field} must be greater than 0")
-        percent_non_negative = {
-            "atr_min_pct",
-            "max_extension_from_ema9_pct",
-            "premarket_gap_max_pct",
-            "premarket_gap_min_percent",
-            "max_short_float_pct",
-        }
-        if field in percent_non_negative and isinstance(value, (int, float)) and value < 0:
-            raise ValueError(f"{field} must be non-negative")
-        if field == "price_min" and value < 0:
-            raise ValueError("price_min must be non-negative")
-        if field == "min_premarket_vol" and value < 0:
-            raise ValueError("min_premarket_vol must be non-negative")
+        if field in {"price_max", "avg_daily_volume_min", "avg_dollar_volume_min", "relative_strength_lookback_minutes", "minimum_rr_ratio", "volume_vs_average_min_ratio"}:
+            if isinstance(value, (int, float)) and value <= 0:
+                raise ValueError(f"{field} must be greater than 0")
+        if field in {"atr_min_pct", "max_extension_from_ema9_pct", "premarket_gap_max_pct", "max_short_float_pct"}:
+            if isinstance(value, (int, float)) and value < 0:
+                raise ValueError(f"{field} must be non-negative")

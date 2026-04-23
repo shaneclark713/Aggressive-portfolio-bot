@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date, datetime
 from typing import Any, Iterable
 
 
@@ -19,6 +20,7 @@ class OptionContract:
     ask: float
     mark: float
     expiry_type: str = "any"
+    days_to_expiry: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -35,10 +37,39 @@ class OptionContract:
             "ask": self.ask,
             "mark": self.mark,
             "expiry_type": self.expiry_type,
+            "days_to_expiry": self.days_to_expiry,
         }
 
 
 class OptionsChainService:
+    def _days_to_expiry(self, expiry_text: str) -> int | None:
+        if not expiry_text:
+            return None
+        for fmt in ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S%z"):
+            try:
+                parsed = datetime.strptime(expiry_text, fmt)
+                return (parsed.date() - date.today()).days
+            except Exception:
+                continue
+        try:
+            parsed = datetime.fromisoformat(expiry_text.replace("Z", "+00:00"))
+            return (parsed.date() - date.today()).days
+        except Exception:
+            return None
+
+    def _classify_expiry(self, days_to_expiry: int | None, current_value: str) -> str:
+        if current_value and current_value != "any":
+            return current_value
+        if days_to_expiry is None:
+            return "any"
+        if days_to_expiry <= 0:
+            return "0dte"
+        if days_to_expiry <= 7:
+            return "weekly"
+        if days_to_expiry <= 31:
+            return "monthly"
+        return "dated"
+
     def normalize_contracts(self, underlying: str, rows: Iterable[dict]) -> list[dict]:
         normalized: list[dict] = []
         for row in rows or []:
@@ -48,12 +79,15 @@ class OptionsChainService:
                 mark = float(row.get("mark", 0) or 0)
                 if mark <= 0:
                     mark = round((bid + ask) / 2, 4) if bid > 0 and ask > 0 else max(bid, ask, 0.0)
+                expiry = str(row.get("expiry") or row.get("expiration_date") or "")
+                days_to_expiry = self._days_to_expiry(expiry)
+                expiry_type = self._classify_expiry(days_to_expiry, str(row.get("expiry_type") or "any").lower())
                 contract = OptionContract(
                     option_symbol=str(row.get("option_symbol") or row.get("symbol") or ""),
                     underlying=str(row.get("underlying") or underlying),
                     option_type=str(row.get("option_type") or row.get("type") or "call").lower(),
                     strike=float(row.get("strike", 0) or 0),
-                    expiry=str(row.get("expiry") or row.get("expiration_date") or ""),
+                    expiry=expiry,
                     delta=float(row.get("delta", 0) or 0),
                     implied_volatility=float(row.get("implied_volatility", row.get("iv", 0)) or 0),
                     open_interest=int(row.get("open_interest", 0) or 0),
@@ -61,7 +95,8 @@ class OptionsChainService:
                     bid=bid,
                     ask=ask,
                     mark=mark,
-                    expiry_type=str(row.get("expiry_type") or "any").lower(),
+                    expiry_type=expiry_type,
+                    days_to_expiry=days_to_expiry,
                 )
             except Exception:
                 continue
@@ -81,6 +116,7 @@ class OptionsChainService:
             sum(float(r.get("mark", 0) or 0) for r in contracts) / len(contracts),
             4,
         ) if contracts else 0.0
+        zero_dte = sum(1 for r in contracts if int(r.get("days_to_expiry", 9999) or 9999) <= 0)
         return {
             "contract_count": len(contracts),
             "call_count": calls,
@@ -88,4 +124,5 @@ class OptionsChainService:
             "total_open_interest": total_oi,
             "total_volume": total_volume,
             "avg_mark": avg_mark,
+            "zero_dte_count": zero_dte,
         }

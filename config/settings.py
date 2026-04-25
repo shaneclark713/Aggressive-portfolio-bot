@@ -47,6 +47,31 @@ class Settings:
     enable_ibkr: bool
     enable_tradovate: bool
 
+    # Legacy single-client broker variables. These are kept so old deployments do not break.
+    alpaca_api_key: str
+    alpaca_secret_key: str
+    alpaca_base_url: str
+    tradier_access_token: str
+    tradier_account_id: str
+    tradier_base_url: str
+
+    # Mode-aware broker variables. Telegram Mode uses these directly:
+    # alerts_only -> no order submission
+    # paper       -> paper/sandbox clients
+    # live        -> live/production clients
+    alpaca_paper_api_key: str
+    alpaca_paper_secret_key: str
+    alpaca_paper_base_url: str
+    alpaca_live_api_key: str
+    alpaca_live_secret_key: str
+    alpaca_live_base_url: str
+    tradier_paper_access_token: str
+    tradier_paper_account_id: str
+    tradier_paper_base_url: str
+    tradier_live_access_token: str
+    tradier_live_account_id: str
+    tradier_live_base_url: str
+
     @property
     def storage_path(self) -> Path:
         return Path(self.bot_storage_path)
@@ -66,7 +91,27 @@ def _get_bool(name: str, default: str = 'false') -> bool:
     return _get(name, default).strip().lower() in {'1', 'true', 'yes', 'on'}
 
 
+def _first(*values: str) -> str:
+    for value in values:
+        if str(value or '').strip():
+            return value
+    return ''
+
+
 def load_settings() -> Settings:
+    legacy_alpaca_base = _get('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets')
+    legacy_tradier_base = _get('TRADIER_BASE_URL', 'https://api.tradier.com/v1')
+
+    alpaca_paper_api_key = _first(_get('ALPACA_PAPER_API_KEY'), _get('ALPACA_API_KEY'))
+    alpaca_paper_secret_key = _first(_get('ALPACA_PAPER_SECRET_KEY'), _get('ALPACA_SECRET_KEY'))
+    alpaca_live_api_key = _first(_get('ALPACA_LIVE_API_KEY'), _get('ALPACA_API_KEY') if 'paper-api' not in legacy_alpaca_base else '')
+    alpaca_live_secret_key = _first(_get('ALPACA_LIVE_SECRET_KEY'), _get('ALPACA_SECRET_KEY') if 'paper-api' not in legacy_alpaca_base else '')
+
+    tradier_paper_access_token = _first(_get('TRADIER_PAPER_ACCESS_TOKEN'), _get('TRADIER_ACCESS_TOKEN') if 'sandbox' in legacy_tradier_base else '')
+    tradier_paper_account_id = _first(_get('TRADIER_PAPER_ACCOUNT_ID'), _get('TRADIER_ACCOUNT_ID') if 'sandbox' in legacy_tradier_base else '')
+    tradier_live_access_token = _first(_get('TRADIER_LIVE_ACCESS_TOKEN'), _get('TRADIER_ACCESS_TOKEN') if 'sandbox' not in legacy_tradier_base else '')
+    tradier_live_account_id = _first(_get('TRADIER_LIVE_ACCOUNT_ID'), _get('TRADIER_ACCOUNT_ID') if 'sandbox' not in legacy_tradier_base else '')
+
     return Settings(
         app_env=_get('APP_ENV', 'production'),
         app_timezone=_get('APP_TIMEZONE', 'America/Phoenix'),
@@ -106,4 +151,22 @@ def load_settings() -> Settings:
         broker_enabled=_get_bool('BROKER_ENABLED', 'false'),
         enable_ibkr=_get_bool('ENABLE_IBKR', 'false'),
         enable_tradovate=_get_bool('ENABLE_TRADOVATE', 'false'),
+        alpaca_api_key=_get('ALPACA_API_KEY', ''),
+        alpaca_secret_key=_get('ALPACA_SECRET_KEY', ''),
+        alpaca_base_url=legacy_alpaca_base,
+        tradier_access_token=_get('TRADIER_ACCESS_TOKEN', ''),
+        tradier_account_id=_get('TRADIER_ACCOUNT_ID', ''),
+        tradier_base_url=legacy_tradier_base,
+        alpaca_paper_api_key=alpaca_paper_api_key,
+        alpaca_paper_secret_key=alpaca_paper_secret_key,
+        alpaca_paper_base_url=_get('ALPACA_PAPER_BASE_URL', 'https://paper-api.alpaca.markets'),
+        alpaca_live_api_key=alpaca_live_api_key,
+        alpaca_live_secret_key=alpaca_live_secret_key,
+        alpaca_live_base_url=_get('ALPACA_LIVE_BASE_URL', 'https://api.alpaca.markets'),
+        tradier_paper_access_token=tradier_paper_access_token,
+        tradier_paper_account_id=tradier_paper_account_id,
+        tradier_paper_base_url=_get('TRADIER_PAPER_BASE_URL', 'https://sandbox.tradier.com/v1'),
+        tradier_live_access_token=tradier_live_access_token,
+        tradier_live_account_id=tradier_live_account_id,
+        tradier_live_base_url=_get('TRADIER_LIVE_BASE_URL', 'https://api.tradier.com/v1'),
     )

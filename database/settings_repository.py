@@ -20,6 +20,14 @@ class SettingsRepository:
         "trail_type": "percent",
         "trail_value": 0.02,
         "max_consecutive_losses": 3,
+        "market_hours_only": True,
+        "allow_premarket_entries": False,
+        "allow_afterhours_entries": False,
+        "market_timezone": "America/New_York",
+        "premarket_start_time": "04:00",
+        "regular_market_open_time": "09:30",
+        "regular_market_close_time": "16:00",
+        "afterhours_end_time": "20:00",
     }
 
     DEFAULT_SWING_TRADE_EXECUTION = {
@@ -38,6 +46,14 @@ class SettingsRepository:
         "trail_type": "percent",
         "trail_value": 0.04,
         "max_consecutive_losses": 3,
+        "market_hours_only": True,
+        "allow_premarket_entries": False,
+        "allow_afterhours_entries": False,
+        "market_timezone": "America/New_York",
+        "premarket_start_time": "04:00",
+        "regular_market_open_time": "09:30",
+        "regular_market_close_time": "16:00",
+        "afterhours_end_time": "20:00",
     }
 
     DEFAULT_OPTIONS_EXECUTION = {
@@ -46,6 +62,14 @@ class SettingsRepository:
         "max_concurrent_positions": 3,
         "time_of_day_restrictor": "15:00",
         "max_consecutive_losses": 3,
+        "market_hours_only": True,
+        "allow_premarket_entries": False,
+        "allow_afterhours_entries": False,
+        "market_timezone": "America/New_York",
+        "premarket_start_time": "04:00",
+        "regular_market_open_time": "09:30",
+        "regular_market_close_time": "16:00",
+        "afterhours_end_time": "20:00",
     }
 
     DEFAULT_OPTIONS_SETTINGS = {

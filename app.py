@@ -163,7 +163,10 @@ async def main() -> None:
 
         mode_aware_tradier = execution_router.tradier_proxy()
         mode_aware_alpaca = execution_router.alpaca_proxy()
-        options_chain_ingest_service = OptionsChainIngestService(settings_repo, mode_aware_tradier)
+        # Market-data reads should prefer live Tradier data even when execution mode is Paper.
+        # Paper mode still routes orders to sandbox through ExecutionRouter.
+        tradier_market_data = tradier_live if _has_tradier_credentials(tradier_live) else mode_aware_tradier
+        options_chain_ingest_service = OptionsChainIngestService(settings_repo, tradier_market_data)
         position_sync_service = PositionSyncService(
             trailing_stop_service,
             alpaca_client=mode_aware_alpaca,
@@ -193,6 +196,7 @@ async def main() -> None:
             "discovery_service": discovery_service,
             "universe_filter": universe_filter,
             "tradier_client": mode_aware_tradier,
+            "tradier_market_data_client": tradier_market_data,
             "tradier_paper_client": tradier_paper,
             "tradier_live_client": tradier_live,
             "alpaca_client": mode_aware_alpaca,

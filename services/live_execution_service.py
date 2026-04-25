@@ -152,7 +152,8 @@ class LiveExecutionService:
         })
         if price is not None:
             payload["limit_price"] = float(price)
-        return await self.execution_router.execute(payload)
+        result = await self.execution_router.execute(payload)
+        return result
 
     async def submit_vertical_spread(
         self,
@@ -173,4 +174,5 @@ class LiveExecutionService:
         })
         if price is not None:
             order["limit_price"] = float(price)
-        return await self.execution_router.execute(order)
+        result = await self.execution_router.execute(order)
+        return result

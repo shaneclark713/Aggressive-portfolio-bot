@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-VALID_FILTER_CATEGORIES = ("descriptive", "fundamental", "technical", "options")
-FILTER_PROFILES = ("overall", "premarket", "midday", "overnight")
+VALID_FILTER_CATEGORIES = ("descriptive", "fundamental", "technical")
+STOCK_FILTER_PROFILES = ("overall", "premarket", "midday", "overnight")
+FILTER_PROFILES = (*STOCK_FILTER_PROFILES, "options")
 EXECUTION_STYLES = (("day_trade", "Day Trade"), ("swing_trade", "Swing Trade"), ("options", "Options"))
 
 
@@ -41,22 +42,10 @@ def build_trade_keyboard(trade_id: str) -> InlineKeyboardMarkup:
 def build_control_panel_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [
-                InlineKeyboardButton("Scans", callback_data="cp|scan_menu"),
-                InlineKeyboardButton("Presets", callback_data="cp|presets"),
-            ],
-            [
-                InlineKeyboardButton("Mode", callback_data="cp|mode"),
-                InlineKeyboardButton("Strategies", callback_data="cp|strategies"),
-            ],
-            [
-                InlineKeyboardButton("Filters", callback_data="cp|filters"),
-                InlineKeyboardButton("Execution", callback_data="cp|execution_menu"),
-            ],
-            [
-                InlineKeyboardButton("ML", callback_data="cp|ml_menu"),
-                InlineKeyboardButton("Exec Profiles", callback_data="cp|exec_profiles"),
-            ],
+            [InlineKeyboardButton("Scans", callback_data="cp|scan_menu"), InlineKeyboardButton("Presets / Filters", callback_data="cp|presets")],
+            [InlineKeyboardButton("Mode", callback_data="cp|mode"), InlineKeyboardButton("Strategies", callback_data="cp|strategies")],
+            [InlineKeyboardButton("Execution", callback_data="cp|execution_menu")],
+            [InlineKeyboardButton("ML", callback_data="cp|ml_menu"), InlineKeyboardButton("Exec Profiles", callback_data="cp|exec_profiles")],
         ]
     )
 
@@ -162,6 +151,7 @@ def build_options_filters_keyboard(settings: dict) -> InlineKeyboardMarkup:
     expiry_mode = _pretty_name(str(settings.get("expiry_mode", "weekly")))
     expiry_value = settings.get("expiry_value", 1)
     rows = [
+        [InlineKeyboardButton(f"Enabled: {_display_value(settings.get('enabled'))}", callback_data="foptedit|enabled")],
         [InlineKeyboardButton(f"Delta Min: {settings.get('delta_min')}", callback_data="foptedit|delta_min")],
         [InlineKeyboardButton(f"Delta Max: {settings.get('delta_max')}", callback_data="foptedit|delta_max")],
         [InlineKeyboardButton(f"Min OI: {settings.get('min_open_interest')}", callback_data="foptedit|min_open_interest")],
@@ -171,7 +161,7 @@ def build_options_filters_keyboard(settings: dict) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(f"Expiry Type: {expiry_mode}", callback_data="foptchoice|expiry_mode")],
         [InlineKeyboardButton(f"Expiry Value: {expiry_value}", callback_data="foptedit|expiry_value")],
         [InlineKeyboardButton(f"Chain Symbol: {settings.get('chain_symbol', 'SPY')}", callback_data="foptedit|chain_symbol")],
-        [InlineKeyboardButton("⬅ Back", callback_data="cp|filters")],
+        [InlineKeyboardButton("⬅ Back", callback_data="presetprofile|options")],
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -200,32 +190,55 @@ def build_execution_profile_menu_keyboard(mode: str, strategies: list[str]) -> I
 
 
 def build_execution_profile_edit_keyboard(mode: str, strategy: str) -> InlineKeyboardMarkup:
-    fields = [
-        ("risk_pct", "Risk %"),
-        ("atr_multiplier", "ATR Mult"),
-        ("ladder_steps", "Ladder Steps"),
-        ("ladder_spacing_pct", "Ladder Spacing"),
-        ("trail_value", "Trail Value"),
-    ]
+    fields = [("risk_pct", "Risk %"), ("atr_multiplier", "ATR Mult"), ("ladder_steps", "Ladder Steps"), ("ladder_spacing_pct", "Ladder Spacing"), ("trail_value", "Trail Value")]
     rows = [[InlineKeyboardButton(label, callback_data=f"ep|edit|{mode}|{strategy}|{field}")] for field, label in fields]
     rows.append([InlineKeyboardButton("⬅ Back", callback_data="cp|exec_profiles")])
     return InlineKeyboardMarkup(rows)
 
 
-def build_presets_keyboard(presets: list[str], current: str, options_settings: dict) -> InlineKeyboardMarkup:
+def build_preset_profiles_keyboard(profile_preset_map: dict[str, str], active_profile: str, options_settings: dict | None = None) -> InlineKeyboardMarkup:
+    options_settings = options_settings or {}
+    rows: list[list[InlineKeyboardButton]] = []
+    for profile in FILTER_PROFILES:
+        if profile == "options":
+            enabled = "ON" if options_settings.get("enabled") else "OFF"
+            label = f"Options ({enabled})"
+        else:
+            label = f"{_pretty_name(profile)} ({_pretty_name(profile_preset_map.get(profile, ''))})"
+        rows.append([InlineKeyboardButton(f"{'✅ ' if active_profile == profile else ''}{label}", callback_data=f"presetprofile|{profile}")])
+    rows.append([InlineKeyboardButton("♻ Reset All Filters", callback_data="freset|all")])
+    rows.append([InlineKeyboardButton("⬅ Back", callback_data="cp|back")])
+    return InlineKeyboardMarkup(rows)
+
+
+def build_profile_preset_keyboard(profile: str, presets: list[str], current: str, options_settings: dict) -> InlineKeyboardMarkup:
+    if profile == "options":
+        enabled_text = "🟢 Options ON" if options_settings.get("enabled") else "⚪ Options OFF"
+        chain_symbol = str(options_settings.get("chain_symbol", "SPY"))
+        return InlineKeyboardMarkup(
+            [
+                [InlineKeyboardButton(enabled_text, callback_data="preset|options_toggle")],
+                [InlineKeyboardButton("Filters", callback_data="profilefilters|options")],
+                [InlineKeyboardButton(f"Chain Symbol: {chain_symbol}", callback_data="preset|edit_chain_symbol")],
+                [InlineKeyboardButton("Chain Summary", callback_data="preset|chain"), InlineKeyboardButton("Refresh Chain", callback_data="preset|refresh_chain")],
+                [InlineKeyboardButton("IV Status", callback_data="preset|iv"), InlineKeyboardButton("Flow Status", callback_data="preset|flow")],
+                [InlineKeyboardButton("⬅ Profiles", callback_data="cp|presets")],
+            ]
+        )
+
     rows = [[InlineKeyboardButton(f"{'✅ ' if name == current else ''}{_pretty_name(name)}", callback_data=f"set|preset|{name}")] for name in presets]
-    enabled_text = "🟢 Options ON" if options_settings.get("enabled") else "⚪ Options OFF"
-    chain_symbol = str(options_settings.get("chain_symbol", "SPY"))
     rows.extend(
         [
-            [InlineKeyboardButton(enabled_text, callback_data="preset|options_toggle")],
-            [InlineKeyboardButton(f"Chain Symbol: {chain_symbol}", callback_data="preset|edit_chain_symbol")],
-            [InlineKeyboardButton("Chain Summary", callback_data="preset|chain"), InlineKeyboardButton("Refresh Chain", callback_data="preset|refresh_chain")],
-            [InlineKeyboardButton("IV Status", callback_data="preset|iv"), InlineKeyboardButton("Flow Status", callback_data="preset|flow")],
-            [InlineKeyboardButton("⬅ Back", callback_data="cp|back")],
+            [InlineKeyboardButton("Filters", callback_data=f"profilefilters|{profile}")],
+            [InlineKeyboardButton("♻ Reset This Profile", callback_data=f"freset_profile|{profile}")],
+            [InlineKeyboardButton("⬅ Profiles", callback_data="cp|presets")],
         ]
     )
     return InlineKeyboardMarkup(rows)
+
+
+def build_presets_keyboard(presets: list[str], current: str, options_settings: dict) -> InlineKeyboardMarkup:
+    return build_profile_preset_keyboard("overall", presets, current, options_settings)
 
 
 def build_mode_keyboard(current: str) -> InlineKeyboardMarkup:
@@ -242,17 +255,13 @@ def build_strategies_keyboard(states: dict[str, bool]) -> InlineKeyboardMarkup:
 
 
 def build_filter_profile_menu_keyboard(profile_preset_map: dict[str, str], active_profile: str) -> InlineKeyboardMarkup:
-    rows = [[InlineKeyboardButton(f"{'✅ ' if profile == active_profile else ''}{_pretty_name(profile)} ({_pretty_name(profile_preset_map.get(profile, ''))})", callback_data=f"fprofile|{profile}")] for profile in FILTER_PROFILES]
-    rows.append([InlineKeyboardButton("Option Filters", callback_data="foptions|show")])
-    rows.append([InlineKeyboardButton("♻ Reset All Filters", callback_data="freset|all")])
-    rows.append([InlineKeyboardButton("⬅ Back", callback_data="cp|back")])
-    return InlineKeyboardMarkup(rows)
+    return build_preset_profiles_keyboard(profile_preset_map, active_profile, {})
 
 
 def build_filter_categories_keyboard(filters_snapshot: dict[str, dict], current_profile: str) -> InlineKeyboardMarkup:
     rows = [[InlineKeyboardButton(f"{_pretty_name(category)} ({len(filters_snapshot.get(category, {}))})", callback_data=f"fcat|{current_profile}|{category}")] for category in VALID_FILTER_CATEGORIES]
-    rows.append([InlineKeyboardButton("♻ Reset This Preset", callback_data=f"freset_profile|{current_profile}")])
-    rows.append([InlineKeyboardButton("⬅ Back", callback_data="cp|filters")])
+    rows.append([InlineKeyboardButton("♻ Reset This Profile", callback_data=f"freset_profile|{current_profile}")])
+    rows.append([InlineKeyboardButton("⬅ Profile", callback_data=f"presetprofile|{current_profile}")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -262,5 +271,5 @@ def build_filter_fields_keyboard(profile: str, category: str, values: dict[str, 
         label = _truncate_label(f"{field}: {_display_value(value)}")
         rows.append([InlineKeyboardButton(label, callback_data=f"fedit|{profile}|{category}|{field}")])
     rows.append([InlineKeyboardButton("♻ Reset Category", callback_data=f"freset|{profile}|{category}")])
-    rows.append([InlineKeyboardButton("⬅ Back", callback_data=f"fprofile|{profile}")])
+    rows.append([InlineKeyboardButton("⬅ Filters", callback_data=f"profilefilters|{profile}")])
     return InlineKeyboardMarkup(rows)

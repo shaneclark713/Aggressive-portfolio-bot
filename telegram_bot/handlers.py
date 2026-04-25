@@ -33,6 +33,8 @@ from .keyboards import (
     build_options_expiry_keyboard,
     build_options_filters_keyboard,
     build_position_mode_keyboard,
+    build_preset_profiles_keyboard,
+    build_profile_preset_keyboard,
     build_presets_keyboard,
     build_scan_menu_keyboard,
     build_strategies_keyboard,
@@ -241,7 +243,7 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
             "profiles": {
                 "day_trade": {**defaults, **legacy},
                 "swing_trade": {**defaults, **legacy},
-                "options": {**defaults, "position_mode": "options", **legacy},
+                "options": {**defaults, **legacy, "position_mode": "options"},
             },
         }
 
@@ -365,6 +367,61 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
             return False
         return True
 
+    def _get_active_filter_profile_safe() -> str:
+        profile = settings_repo.get("active_filter_profile", None)
+        if not profile and hasattr(config_service, "get_active_filter_profile"):
+            try:
+                profile = config_service.get_active_filter_profile()
+            except Exception:
+                profile = None
+        if profile not in {"overall", "premarket", "midday", "overnight", "options"}:
+            profile = "overall"
+        return profile
+
+    def _set_active_filter_profile_safe(profile: str) -> str:
+        profile = profile if profile in {"overall", "premarket", "midday", "overnight", "options"} else "overall"
+        settings_repo.set("active_filter_profile", profile)
+        if profile != "options" and hasattr(config_service, "set_active_filter_profile"):
+            try:
+                config_service.set_active_filter_profile(profile)
+            except Exception:
+                pass
+        return profile
+
+    def _get_profile_preset_map_safe() -> dict[str, str]:
+        if hasattr(config_service, "get_profile_preset_map"):
+            try:
+                return dict(config_service.get_profile_preset_map())
+            except Exception:
+                pass
+        return {"overall": "day_trade_momentum", "premarket": "premarket", "midday": "day_trade_momentum", "overnight": "swing_trade"}
+
+    def _get_available_presets_safe() -> list[str]:
+        if hasattr(config_service, "get_available_presets"):
+            try:
+                return list(config_service.get_available_presets())
+            except Exception:
+                pass
+        return ["day_trade_momentum", "swing_trade", "premarket", "midday", "overnight"]
+
+    def _get_profile_preset_safe(profile: str) -> str:
+        if hasattr(config_service, "get_profile_preset"):
+            try:
+                return config_service.get_profile_preset(profile)
+            except Exception:
+                pass
+        return _get_profile_preset_map_safe().get(profile, "day_trade_momentum")
+
+    def _set_profile_preset_safe(profile: str, preset: str) -> None:
+        _set_active_filter_profile_safe(profile)
+        if hasattr(config_service, "set_profile_preset"):
+            try:
+                config_service.set_profile_preset(profile, preset)
+                return
+            except Exception:
+                pass
+        settings_repo.set(f"profile_preset.{profile}", preset)
+
     async def _show_execution_root(query):
         style = _get_active_execution_style()
         settings = _get_execution_settings(style)
@@ -392,14 +449,28 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
 
     async def _show_presets_root(query):
-        profile = config_service.get_active_filter_profile()
-        current = config_service.get_profile_preset(profile)
+        active_profile = _get_active_filter_profile_safe()
         await query.edit_message_text(
-            f"Presets for {profile.title()}",
-            reply_markup=build_presets_keyboard(config_service.get_available_presets(), current, _get_options_settings()),
+            "Preset Profiles",
+            reply_markup=build_preset_profiles_keyboard(_get_profile_preset_map_safe(), active_profile, _get_options_settings()),
+        )
+
+    async def _show_profile_detail(query, profile: str):
+        profile = _set_active_filter_profile_safe(profile)
+        if profile == "options":
+            await query.edit_message_text(
+                "Options Profile",
+                reply_markup=build_profile_preset_keyboard("options", [], "", _get_options_settings()),
+            )
+            return
+        current = _get_profile_preset_safe(profile)
+        await query.edit_message_text(
+            f"{profile.replace('_', ' ').title()} Profile",
+            reply_markup=build_profile_preset_keyboard(profile, _get_available_presets_safe(), current, _get_options_settings()),
         )
 
     async def _show_option_filters(query):
+        _set_active_filter_profile_safe("options")
         settings = _get_options_settings()
         await query.edit_message_text(
             format_options_settings(settings),
@@ -408,17 +479,16 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         )
 
     async def _show_filters_root(query):
-        active_profile = config_service.get_active_filter_profile()
-        await query.edit_message_text(
-            "Filter Profiles",
-            reply_markup=build_filter_profile_menu_keyboard(config_service.get_profile_preset_map(), active_profile),
-        )
+        await _show_presets_root(query)
 
     async def _show_filter_profile(query, profile: str):
-        config_service.set_active_filter_profile(profile)
+        profile = _set_active_filter_profile_safe(profile)
+        if profile == "options":
+            await _show_option_filters(query)
+            return
         filters_snapshot = config_service.resolve_filters(profile=profile)
         await query.edit_message_text(
-            f"Filters: {profile.title()}",
+            f"{profile.title()} Filters",
             reply_markup=build_filter_categories_keyboard(filters_snapshot, profile),
         )
 
@@ -844,7 +914,7 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
                 if discovery is None:
                     await query.edit_message_text("Discovery service not configured.", reply_markup=build_scan_menu_keyboard())
                     return
-                profile = config_service.get_active_filter_profile()
+                profile = _get_active_filter_profile_safe()
                 snapshot = await discovery.get_snapshot(profile, force_refresh=True)
                 await query.edit_message_text(
                     format_simple_lines("Snapshot Refreshed", [f"Profile: {profile}", f"Rows: {snapshot.get('row_count', len(snapshot.get('rows', [])))}"]),
@@ -856,7 +926,7 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
                 if discovery is None:
                     await query.edit_message_text("Discovery service not configured.", reply_markup=build_scan_menu_keyboard())
                     return
-                profile = config_service.get_active_filter_profile()
+                profile = _get_active_filter_profile_safe()
                 status = await discovery.snapshot_status(profile)
                 lines = [f"Profile: {status.get('profile')}", f"Rows: {status.get('row_count', 0)}", f"Source: {status.get('source', 'unknown')}", f"Created: {status.get('created_at', 'unknown')}"]
                 await query.edit_message_text(format_simple_lines("Snapshot Status", lines), parse_mode="HTML", reply_markup=build_scan_menu_keyboard())
@@ -898,12 +968,12 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         if data.startswith("set|preset|"):
             _clear_pending(context)
             preset = data.split("|", 2)[2]
-            profile = config_service.get_active_filter_profile()
-            config_service.set_profile_preset(profile, preset)
-            await query.edit_message_text(
-                f"Presets for {profile.title()}",
-                reply_markup=build_presets_keyboard(config_service.get_available_presets(), config_service.get_profile_preset(profile), _get_options_settings()),
-            )
+            profile = _get_active_filter_profile_safe()
+            if profile == "options":
+                await _show_profile_detail(query, "options")
+                return
+            _set_profile_preset_safe(profile, preset)
+            await _show_profile_detail(query, profile)
             return
         if data.startswith("set|mode|"):
             _clear_pending(context)
@@ -919,6 +989,18 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
             await query.edit_message_text("Strategies", reply_markup=build_strategies_keyboard(config_service.get_strategy_states()))
             return
 
+        # combined preset/profile/filter menu
+        if data.startswith("presetprofile|"):
+            _clear_pending(context)
+            profile = data.split("|", 1)[1]
+            await _show_profile_detail(query, profile)
+            return
+        if data.startswith("profilefilters|"):
+            _clear_pending(context)
+            profile = data.split("|", 1)[1]
+            await _show_filter_profile(query, profile)
+            return
+
         # filters
         if data.startswith("fprofile|"):
             _clear_pending(context)
@@ -928,10 +1010,7 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         if data.startswith("fcat|"):
             _clear_pending(context)
             _, profile, category = data.split("|", 2)
-            if category == "options":
-                await _show_option_filters(query)
-            else:
-                await _show_filter_category(query, profile, category)
+            await _show_filter_category(query, profile, category)
             return
         if data.startswith("fedit|"):
             _clear_pending(context)
@@ -942,13 +1021,14 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         if data == "freset|all":
             _clear_pending(context)
             config_service.reset_all_filter_overrides()
-            await _show_filters_root(query)
+            await _show_presets_root(query)
             return
         if data.startswith("freset_profile|"):
             _clear_pending(context)
             profile = data.split("|", 1)[1]
-            config_service.reset_filter_overrides(profile=profile)
-            await _show_filter_profile(query, profile)
+            if profile != "options":
+                config_service.reset_filter_overrides(profile=profile)
+            await _show_profile_detail(query, profile)
             return
         if data.startswith("freset|"):
             _clear_pending(context)
@@ -1038,28 +1118,28 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
             if action == "options_toggle":
                 _clear_pending(context)
                 _update_options_settings(enabled=not settings.get("enabled", False))
-                await _show_presets_root(query)
+                await _show_profile_detail(query, "options")
                 return
             if action == "chain":
                 _clear_pending(context)
-                await query.edit_message_text(format_chain_summary(chain_service.summarize_chain(_get_option_chain_rows())), parse_mode="HTML", reply_markup=build_presets_keyboard(config_service.get_available_presets(), config_service.get_profile_preset(config_service.get_active_filter_profile()), _get_options_settings()))
+                await query.edit_message_text(format_chain_summary(chain_service.summarize_chain(_get_option_chain_rows())), parse_mode="HTML", reply_markup=build_profile_preset_keyboard("options", [], "", _get_options_settings()))
                 return
             if action == "iv":
                 _clear_pending(context)
-                await query.edit_message_text(format_iv_status(iv_analyzer.summarize_chain(_get_option_chain_rows())), parse_mode="HTML", reply_markup=build_presets_keyboard(config_service.get_available_presets(), config_service.get_profile_preset(config_service.get_active_filter_profile()), _get_options_settings()))
+                await query.edit_message_text(format_iv_status(iv_analyzer.summarize_chain(_get_option_chain_rows())), parse_mode="HTML", reply_markup=build_profile_preset_keyboard("options", [], "", _get_options_settings()))
                 return
             if action == "flow":
                 _clear_pending(context)
-                await query.edit_message_text(format_flow_status(flow_analyzer.summarize(_get_options_flow_rows())), parse_mode="HTML", reply_markup=build_presets_keyboard(config_service.get_available_presets(), config_service.get_profile_preset(config_service.get_active_filter_profile()), _get_options_settings()))
+                await query.edit_message_text(format_flow_status(flow_analyzer.summarize(_get_options_flow_rows())), parse_mode="HTML", reply_markup=build_profile_preset_keyboard("options", [], "", _get_options_settings()))
                 return
             if action == "refresh_chain":
                 _clear_pending(context)
                 symbol = settings.get("chain_symbol", "SPY")
                 if app_services.get("tradier_client") is None:
-                    await query.edit_message_text("Tradier client not configured.", reply_markup=build_presets_keyboard(config_service.get_available_presets(), config_service.get_profile_preset(config_service.get_active_filter_profile()), settings))
+                    await query.edit_message_text("Tradier client not configured.", reply_markup=build_profile_preset_keyboard("options", [], "", settings))
                     return
                 payload = await options_chain_ingest.refresh_chain(symbol)
-                await query.edit_message_text(format_chain_summary(payload["summary"]), parse_mode="HTML", reply_markup=build_presets_keyboard(config_service.get_available_presets(), config_service.get_profile_preset(config_service.get_active_filter_profile()), _get_options_settings()))
+                await query.edit_message_text(format_chain_summary(payload["summary"]), parse_mode="HTML", reply_markup=build_profile_preset_keyboard("options", [], "", _get_options_settings()))
                 return
             if action == "edit_chain_symbol":
                 _clear_pending(context)

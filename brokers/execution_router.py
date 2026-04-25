@@ -1,100 +1,231 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable
+from typing import Any, Dict
+
+
+class ModeAwareAlpacaProxy:
+    """Small proxy used by services that only need current-mode Alpaca reads."""
+
+    def __init__(self, router: "ExecutionRouter"):
+        self.router = router
+
+    async def get_positions(self, symbol: str | None = None) -> list[dict]:
+        client = self.router.get_alpaca_client(order=False)
+        if client is None:
+            return []
+        return await client.get_positions(symbol=symbol)
+
+
+class ModeAwareTradierProxy:
+    """Small proxy used by services that need current-mode Tradier reads."""
+
+    def __init__(self, router: "ExecutionRouter"):
+        self.router = router
+
+    async def get_expirations(self, symbol: str) -> list[str]:
+        client = self.router.get_tradier_client(order=False)
+        if client is None:
+            return []
+        return await client.get_expirations(symbol)
+
+    async def get_options_chain(self, symbol: str, expiration: str | None = None, greeks: bool = True):
+        client = self.router.get_tradier_client(order=False)
+        if client is None:
+            return []
+        return await client.get_options_chain(symbol=symbol, expiration=expiration, greeks=greeks)
+
+    async def get_positions(self) -> list[dict]:
+        client = self.router.get_tradier_client(order=False)
+        if client is None:
+            return []
+        return await client.get_positions()
 
 
 class ExecutionRouter:
-    def __init__(self, alpaca_client=None, tradier_client=None, config_service=None):
+    def __init__(
+        self,
+        alpaca_client=None,
+        tradier_client=None,
+        config_service=None,
+        alpaca_paper_client=None,
+        alpaca_live_client=None,
+        tradier_paper_client=None,
+        tradier_live_client=None,
+    ):
+        # Legacy single clients are kept as fallbacks for older deployments.
         self.alpaca_client = alpaca_client
         self.tradier_client = tradier_client
         self.config_service = config_service
 
+        # Mode-specific clients are what Telegram Mode should use.
+        self.alpaca_paper_client = alpaca_paper_client
+        self.alpaca_live_client = alpaca_live_client
+        self.tradier_paper_client = tradier_paper_client
+        self.tradier_live_client = tradier_live_client
+
+    def alpaca_proxy(self) -> ModeAwareAlpacaProxy:
+        return ModeAwareAlpacaProxy(self)
+
+    def tradier_proxy(self) -> ModeAwareTradierProxy:
+        return ModeAwareTradierProxy(self)
+
     def _mode(self) -> str:
         if self.config_service is None:
-            return "paper"
+            return "alerts_only"
         if hasattr(self.config_service, "get_execution_mode"):
-            mode = self.config_service.get_execution_mode()
-        elif isinstance(self.config_service, dict):
-            mode = self.config_service.get("mode", "paper")
-        else:
-            mode = "paper"
-        normalized = str(mode or "paper").lower()
-        return {"approval_only": "paper", "automated": "live", "alerts_only": "alerts_only"}.get(normalized, normalized)
+            return str(self.config_service.get_execution_mode() or "alerts_only").lower()
+        if isinstance(self.config_service, dict):
+            return str(self.config_service.get("mode", "alerts_only") or "alerts_only").lower()
+        return "alerts_only"
+
+    def _is_alerts_only(self) -> bool:
+        return self._mode() in {"alerts", "alert", "alerts_only", "off"}
+
+    def _is_paper(self) -> bool:
+        return self._mode() in {"paper", "paper_trade", "paper_trading"}
+
+    def _is_live(self) -> bool:
+        return self._mode() in {"live", "automated", "auto"}
+
+    @staticmethod
+    def _alpaca_ready(client) -> bool:
+        return bool(client and getattr(client, "api_key", "") and getattr(client, "secret_key", ""))
+
+    @staticmethod
+    def _tradier_ready(client) -> bool:
+        return bool(client and getattr(client, "token", "") and getattr(client, "account_id", ""))
+
+    def get_alpaca_client(self, order: bool = True):
+        """Return the Alpaca client selected by Telegram mode.
+
+        For order=True, alerts_only intentionally returns None and paper never falls back
+        to live credentials. That prevents accidental live orders while the UI says Paper.
+        """
+        if self._is_alerts_only():
+            if order:
+                return None
+            return self.alpaca_paper_client if self._alpaca_ready(self.alpaca_paper_client) else self.alpaca_live_client
+        if self._is_paper():
+            return self.alpaca_paper_client if self._alpaca_ready(self.alpaca_paper_client) else None
+        if self._is_live():
+            return self.alpaca_live_client if self._alpaca_ready(self.alpaca_live_client) else self.alpaca_client
+        return None
+
+    def get_tradier_client(self, order: bool = True):
+        """Return the Tradier client selected by Telegram mode.
+
+        For order=True, alerts_only intentionally returns None and paper never falls back
+        to production credentials. That prevents accidental live options orders.
+        """
+        if self._is_alerts_only():
+            if order:
+                return None
+            return self.tradier_paper_client if self._tradier_ready(self.tradier_paper_client) else self.tradier_live_client
+        if self._is_paper():
+            return self.tradier_paper_client if self._tradier_ready(self.tradier_paper_client) else None
+        if self._is_live():
+            return self.tradier_live_client if self._tradier_ready(self.tradier_live_client) else self.tradier_client
+        return None
+
+    async def get_expirations(self, symbol: str) -> list[str]:
+        client = self.get_tradier_client(order=False)
+        if client is None:
+            return []
+        return await client.get_expirations(symbol)
+
+    async def get_options_chain(self, symbol: str, expiration: str | None = None, greeks: bool = True):
+        client = self.get_tradier_client(order=False)
+        if client is None:
+            return []
+        return await client.get_options_chain(symbol=symbol, expiration=expiration, greeks=greeks)
 
     async def execute(self, trade: Dict[str, Any]):
-        trade_type = str(trade.get("type") or trade.get("instrument_type") or trade.get("asset_type") or "stock").lower()
-        if self._mode() == "alerts_only":
-            return {"status": "alerts_only", "trade": trade}
+        trade_type = str(trade.get("type") or trade.get("instrument_type") or "stock").lower()
+        if self._is_alerts_only():
+            return {"status": "blocked", "reason": "execution mode is alerts_only", "trade": trade}
         if trade_type in {"option", "options"} and trade.get("legs"):
             return await self._execute_multileg_option(trade)
         if trade_type in {"option", "options"}:
             return await self._execute_option(trade)
         return await self._execute_stock(trade)
 
-    async def execute_many(self, trades: Iterable[Dict[str, Any]]) -> list[dict[str, Any]]:
-        results: list[dict[str, Any]] = []
-        for trade in trades:
-            try:
-                results.append({"trade": trade, "result": await self.execute(trade)})
-            except Exception as exc:
-                results.append({"trade": trade, "error": str(exc)})
-        return results
-
     async def _execute_stock(self, trade: Dict[str, Any]):
-        if self._mode() == "paper":
-            return {"status": "paper", "trade": trade}
-        if self.alpaca_client is None:
-            raise RuntimeError("Alpaca client is not configured")
+        client = self.get_alpaca_client(order=True)
+        if client is None:
+            return {
+                "status": "blocked",
+                "reason": f"Alpaca client for mode '{self._mode()}' is not configured",
+                "trade": trade,
+            }
 
+        symbol = trade["symbol"]
+        qty = trade.get("qty", 1)
+        side = trade.get("side", "buy")
         limit_price = trade.get("limit_price")
-        stop_price = trade.get("stop_price")
-        payload = {
-            "symbol": str(trade["symbol"]).upper(),
-            "qty": trade.get("qty", 1),
-            "side": trade.get("side", "buy"),
-            "limit_price": None if limit_price in (None, "") else limit_price,
-            "stop_price": None if stop_price in (None, "") else stop_price,
-            "order_type": trade.get("order_type") or ("limit" if limit_price not in (None, "") else "market"),
-            "time_in_force": trade.get("time_in_force", "day"),
-            "client_order_id": trade.get("client_order_id") or f"{trade.get('symbol','UNK')}-{trade.get('step','0')}",
-        }
-        return await self.alpaca_client.place_order(**payload)
+        order_type = trade.get("order_type") or ("limit" if limit_price not in (None, "") else "market")
+
+        if hasattr(client, "place_order"):
+            return await client.place_order(
+                symbol=symbol,
+                qty=qty,
+                side=side,
+                order_type=order_type,
+                limit_price=limit_price,
+            )
+
+        if hasattr(client, "submit_order"):
+            kwargs = {"symbol": symbol, "qty": qty, "side": side, "type": order_type, "time_in_force": "day"}
+            if limit_price:
+                kwargs["limit_price"] = limit_price
+            return await client.submit_order(**kwargs)
+
+        raise RuntimeError("Alpaca client does not expose a supported order method")
 
     async def _execute_option(self, trade: Dict[str, Any]):
-        if self._mode() == "paper":
-            return {"status": "paper", "trade": trade}
-        if self.tradier_client is None:
-            raise RuntimeError("Tradier client is not configured")
+        client = self.get_tradier_client(order=True)
+        if client is None:
+            return {
+                "status": "blocked",
+                "reason": f"Tradier client for mode '{self._mode()}' is not configured",
+                "trade": trade,
+            }
 
-        symbol = str(trade["symbol"]).upper()
-        qty = trade.get("qty", trade.get("quantity", 1))
-        side = str(trade.get("side", "buy_to_open")).lower()
+        symbol = trade["symbol"]
+        qty = trade.get("qty", 1)
+        side = trade.get("side", "buy_to_open")
         option_symbol = trade.get("option_symbol")
         if not option_symbol:
             raise RuntimeError("Option trade missing option_symbol")
 
-        return await self.tradier_client.place_option_order(
+        return await client.place_option_order(
             symbol=symbol,
             qty=qty,
             side=side,
             option_symbol=option_symbol,
-            order_type=str(trade.get("order_type") or "market").lower(),
-            price=trade.get("price", trade.get("limit_price")),
-            stop=trade.get("stop", trade.get("stop_price")),
-            duration=trade.get("duration", trade.get("time_in_force", "day")),
+            order_type=trade.get("order_type", "market"),
+            price=trade.get("limit_price") or trade.get("price"),
+            stop=trade.get("stop") or trade.get("stop_price"),
         )
 
     async def _execute_multileg_option(self, trade: Dict[str, Any]):
-        if self._mode() == "paper":
-            return {"status": "paper", "trade": trade}
-        if self.tradier_client is None:
-            raise RuntimeError("Tradier client is not configured")
+        client = self.get_tradier_client(order=True)
+        if client is None:
+            return {
+                "status": "blocked",
+                "reason": f"Tradier client for mode '{self._mode()}' is not configured",
+                "trade": trade,
+            }
 
-        return await self.tradier_client.place_multileg_order(
-            symbol=str(trade["symbol"]).upper(),
-            legs=list(trade.get("legs", [])),
-            quantity=int(trade.get("qty", trade.get("quantity", 1)) or 1),
-            duration=trade.get("duration", trade.get("time_in_force", "day")),
-            order_type=str(trade.get("order_type") or "market").lower(),
-            price=trade.get("price", trade.get("limit_price")),
+        symbol = trade["symbol"]
+        legs = list(trade.get("legs", []))
+        quantity = int(trade.get("qty", trade.get("quantity", 1)) or 1)
+        if not legs:
+            raise RuntimeError("Multi-leg option trade missing legs")
+
+        return await client.place_multileg_order(
+            symbol=symbol,
+            legs=legs,
+            quantity=quantity,
+            order_type=trade.get("order_type", "market"),
+            price=trade.get("limit_price") or trade.get("price"),
         )

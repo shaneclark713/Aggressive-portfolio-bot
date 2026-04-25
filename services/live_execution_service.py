@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from execution.ladder_manager import LadderManager
 from services.options_order_service import OptionsOrderService
@@ -20,6 +21,8 @@ class LiveExecutionService:
         if trade_style:
             return self.settings_repo.normalize_execution_scope(trade_style)
         text = str(strategy or "").strip().lower()
+        if "option" in text:
+            return "options"
         if "swing" in text or "overnight" in text:
             return "swing_trade"
         return "day_trade"
@@ -35,15 +38,22 @@ class LiveExecutionService:
         return profile
 
     def _entry_cutoff_allows_new_positions(self, profile: dict[str, Any], now: datetime | None = None) -> tuple[bool, str | None]:
-        cutoff = str(profile.get("time_of_day_restrictor") or "").strip()
+        cutoff = str(profile.get("time_of_day_restrictor") or profile.get("entry_cutoff_time") or "").strip()
         if not cutoff:
             return True, None
         try:
             hour, minute = [int(part) for part in cutoff.split(":", 1)]
         except Exception:
             return True, None
-        now = now or datetime.now()
-        current_minutes = now.hour * 60 + now.minute
+        timezone_name = str(profile.get("market_timezone") or "America/New_York")
+        try:
+            tz = ZoneInfo(timezone_name)
+        except Exception:
+            tz = ZoneInfo("America/New_York")
+        now_dt = now.astimezone(tz) if now is not None and now.tzinfo else now or datetime.now(tz)
+        if now_dt.tzinfo is None:
+            now_dt = now_dt.replace(tzinfo=tz)
+        current_minutes = now_dt.hour * 60 + now_dt.minute
         cutoff_minutes = hour * 60 + minute
         if current_minutes > cutoff_minutes:
             return False, f"entry cutoff reached ({cutoff})"
@@ -111,11 +121,11 @@ class LiveExecutionService:
         trade_style: str | None = None,
     ) -> dict[str, Any]:
         profile = self._get_execution_profile(trade_style, strategy)
-        stop_loss_pct = float(profile.get("stop_loss_pct", 0.08) or 0.08)
+        stop_loss_pct = float(profile.get("stop_loss_pct", profile.get("stop_loss", 0.08)) or 0.08)
         effective_stop = float(stop_loss) if stop_loss is not None else (
             entry_price * (1 - stop_loss_pct) if str(side).upper() == "LONG" else entry_price * (1 + stop_loss_pct)
         )
-        take_profit_pct = float(profile.get("take_profit_pct", 0.20) or 0.20)
+        take_profit_pct = float(profile.get("take_profit_pct", profile.get("take_profit", 0.20)) or 0.20)
         if rr_targets is None:
             rr_targets = [1.0, 1.5, 2.0]
             if take_profit_pct > 0 and effective_stop != entry_price:
@@ -142,6 +152,30 @@ class LiveExecutionService:
             "submit_ready": str(mode).lower() != "alerts_only",
         }
 
+    async def submit_exit_ladder(
+        self,
+        symbol: str,
+        side: str,
+        total_size: int,
+        entry_price: float,
+        stop_loss: float | None,
+        mode: str,
+        strategy: str,
+        rr_targets: list[float] | None = None,
+        trade_style: str | None = None,
+    ) -> dict[str, Any]:
+        return await self.build_exit_ladder(
+            symbol=symbol,
+            side=side,
+            total_size=total_size,
+            entry_price=entry_price,
+            stop_loss=stop_loss,
+            mode=mode,
+            strategy=strategy,
+            rr_targets=rr_targets,
+            trade_style=trade_style,
+        )
+
     async def submit_single_option(
         self,
         symbol: str,
@@ -164,8 +198,7 @@ class LiveExecutionService:
             allowed, reason = self.risk_service.can_open_new_position(trade_style="options", strategy="options")
             if not allowed:
                 return {"status": "blocked", "reason": reason, "symbol": symbol, "option_symbol": option_symbol}
-        result = await self.execution_router.execute(payload)
-        return result
+        return await self.execution_router.execute(payload)
 
     async def submit_vertical_spread(
         self,
@@ -190,5 +223,20 @@ class LiveExecutionService:
             allowed, reason = self.risk_service.can_open_new_position(trade_style="options", strategy="options")
             if not allowed:
                 return {"status": "blocked", "reason": reason, "symbol": symbol, "legs": [long_symbol, short_symbol]}
-        result = await self.execution_router.execute(order)
-        return result
+        return await self.execution_router.execute(order)
+
+    async def execute_triggered_trailing_exits(self, limit_buffer_pct: float = 0.0) -> dict[str, Any]:
+        if self.trailing_stop_service is None:
+            return {"triggered": 0, "results": [], "error": "trailing stop service not configured"}
+        payloads = self.trailing_stop_service.build_exit_payloads(limit_buffer_pct=limit_buffer_pct)
+        results: list[dict[str, Any]] = []
+        for payload in payloads:
+            position_id = payload.pop("position_id", "unknown")
+            try:
+                result = await self.execution_router.execute(payload)
+                results.append({"position_id": position_id, "payload": payload, "result": result})
+                if hasattr(self.trailing_stop_service, "mark_exit_pending"):
+                    self.trailing_stop_service.mark_exit_pending(position_id, result=result)
+            except Exception as exc:
+                results.append({"position_id": position_id, "payload": payload, "error": str(exc)})
+        return {"triggered": len(payloads), "results": results}

@@ -77,7 +77,7 @@ PERCENT_FIELDS = {
     "take_profit",
     "stop_loss",
 }
-INT_FIELDS = {"ladder_steps", "min_volume", "min_open_interest", "min_daily_volume", "max_concurrent_positions", "expiry_value"}
+INT_FIELDS = {"ladder_steps", "min_volume", "min_open_interest", "min_daily_volume", "max_concurrent_positions", "max_consecutive_losses", "expiry_value"}
 FLOAT_FIELDS = {"atr_multiplier", "delta_min", "delta_max", "contract_min_price", "contract_max_price"}
 STR_FIELDS = {"position_mode", "trail_type", "expiry_mode", "chain_symbol", "entry_cutoff_time"}
 EXECUTION_STYLE_FIELDS = {"day_trade", "swing_trade", "options"}
@@ -220,6 +220,7 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
             "min_volume": 500000,
             "max_slippage_pct": 0.02,
             "max_concurrent_positions": 3,
+            "max_consecutive_losses": 3,
             "entry_cutoff_time": "15:00",
             "ladder_steps": 3,
             "ladder_spacing_pct": 0.01,

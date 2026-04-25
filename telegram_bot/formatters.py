@@ -263,6 +263,7 @@ def format_execution_settings(settings: Mapping[str, Any], style: str = "day_tra
         f"<b>Min Volume:</b> {settings.get('min_volume', 500000)}\n"
         f"<b>Max Slippage %:</b> {_fmt_pct(settings.get('max_slippage_pct', 0.02))}\n"
         f"<b>Max Concurrent Positions:</b> {settings.get('max_concurrent_positions', 3)}\n"
+        f"<b>Max Consecutive Losses:</b> {settings.get('max_consecutive_losses', 3)}\n"
         f"<b>Entry Cutoff:</b> {escape(str(settings.get('entry_cutoff_time', '15:00')))}\n"
         f"<b>Ladder Steps:</b> {settings.get('ladder_steps', 3)}\n"
         f"<b>Ladder Spacing %:</b> {_fmt_pct(settings.get('ladder_spacing_pct', 0.01))}\n"
@@ -289,6 +290,7 @@ def format_execution_safeguards(settings: Mapping[str, Any], style: str = "day_t
         f"<b>Min Volume:</b> {settings.get('min_volume', 500000)}\n"
         f"<b>Max Slippage %:</b> {_fmt_pct(settings.get('max_slippage_pct', 0.02))}\n"
         f"<b>Max Concurrent Positions:</b> {settings.get('max_concurrent_positions', 3)}\n"
+        f"<b>Max Consecutive Losses:</b> {settings.get('max_consecutive_losses', 3)}\n"
         f"<b>Entry Cutoff:</b> {escape(str(settings.get('entry_cutoff_time', '15:00')))}"
     )
 

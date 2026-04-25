@@ -100,6 +100,7 @@ def build_execution_safeguards_keyboard(settings: dict, active_style: str) -> In
             [InlineKeyboardButton(f"Min Volume: {_display_value(settings.get('min_volume'))}", callback_data="execedit|safeguards|min_volume")],
             [InlineKeyboardButton(f"Max Slippage %: {_display_value(settings.get('max_slippage_pct'))}", callback_data="execedit|safeguards|max_slippage_pct")],
             [InlineKeyboardButton(f"Max Concurrent: {_display_value(settings.get('max_concurrent_positions'))}", callback_data="execedit|safeguards|max_concurrent_positions")],
+            [InlineKeyboardButton(f"Max Consecutive Losses: {_display_value(settings.get('max_consecutive_losses'))}", callback_data="execedit|safeguards|max_consecutive_losses")],
             [InlineKeyboardButton(f"Entry Cutoff: {_display_value(settings.get('entry_cutoff_time'))}", callback_data="execedit|safeguards|entry_cutoff_time")],
             [InlineKeyboardButton("⬅ Back", callback_data="cp|execution_menu")],
         ]

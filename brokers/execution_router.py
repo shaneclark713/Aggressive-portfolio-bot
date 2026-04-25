@@ -23,13 +23,13 @@ class ModeAwareTradierProxy:
         self.router = router
 
     async def get_expirations(self, symbol: str) -> list[str]:
-        client = self.router.get_tradier_client(order=False)
+        client = self.router.get_tradier_market_data_client()
         if client is None:
             return []
         return await client.get_expirations(symbol)
 
     async def get_options_chain(self, symbol: str, expiration: str | None = None, greeks: bool = True):
-        client = self.router.get_tradier_client(order=False)
+        client = self.router.get_tradier_market_data_client()
         if client is None:
             return []
         return await client.get_options_chain(symbol=symbol, expiration=expiration, greeks=greeks)
@@ -116,6 +116,7 @@ class ExecutionRouter:
 
         For order=True, alerts_only intentionally returns None and paper never falls back
         to production credentials. That prevents accidental live options orders.
+        For account reads, the current mode is respected so Paper shows paper positions.
         """
         if self._is_alerts_only():
             if order:
@@ -127,17 +128,50 @@ class ExecutionRouter:
             return self.tradier_live_client if self._tradier_ready(self.tradier_live_client) else self.tradier_client
         return None
 
+    def get_tradier_market_data_client(self):
+        """Return the best Tradier client for option-chain market data.
+
+        Chain/expiration reads are market data, not order execution. Prefer the live
+        Tradier client because the sandbox frequently returns empty chains even when
+        orders should still route to Paper in Paper mode.
+        """
+        if self._tradier_ready(self.tradier_live_client):
+            return self.tradier_live_client
+        if self._tradier_ready(self.tradier_client):
+            return self.tradier_client
+        if self._tradier_ready(self.tradier_paper_client):
+            return self.tradier_paper_client
+        return None
+
     async def get_expirations(self, symbol: str) -> list[str]:
-        client = self.get_tradier_client(order=False)
+        client = self.get_tradier_market_data_client()
         if client is None:
             return []
         return await client.get_expirations(symbol)
 
     async def get_options_chain(self, symbol: str, expiration: str | None = None, greeks: bool = True):
-        client = self.get_tradier_client(order=False)
+        client = self.get_tradier_market_data_client()
         if client is None:
             return []
         return await client.get_options_chain(symbol=symbol, expiration=expiration, greeks=greeks)
+
+    async def place_order(self, order_request):
+        """Compatibility adapter for older alert-service OrderRequest objects."""
+        trade = {
+            "symbol": getattr(order_request, "symbol", None),
+            "side": getattr(order_request, "side", "buy"),
+            "type": getattr(order_request, "instrument_type", "stock"),
+            "instrument_type": getattr(order_request, "instrument_type", "stock"),
+            "qty": getattr(order_request, "quantity", 1),
+            "quantity": getattr(order_request, "quantity", 1),
+            "order_type": getattr(order_request, "order_type", "market"),
+            "limit_price": getattr(order_request, "limit_price", None),
+            "stop_price": getattr(order_request, "stop_price", None),
+        }
+        option_symbol = getattr(order_request, "option_symbol", None)
+        if option_symbol:
+            trade["option_symbol"] = option_symbol
+        return await self.execute(trade)
 
     async def execute(self, trade: Dict[str, Any]):
         trade_type = str(trade.get("type") or trade.get("instrument_type") or "stock").lower()

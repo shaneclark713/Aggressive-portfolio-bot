@@ -26,28 +26,68 @@ class TradierClient:
         if not self.account_id:
             raise RuntimeError("Tradier account ID is missing")
 
+    def _parse_expiration_payload(self, payload: dict) -> list[str]:
+        """Normalize Tradier expiration responses into a list of date strings.
+
+        Tradier returns different response shapes depending on expirationType.
+        With expirationType=true, the payload may contain an ``expiration`` list
+        of objects instead of a plain ``date`` list. The old parser only handled
+        the plain ``date`` shape, so refresh could stop after /expirations and
+        never request /chains.
+        """
+        expirations_block = (payload or {}).get("expirations") or {}
+        raw = expirations_block.get("date")
+        if raw is None:
+            raw = expirations_block.get("expiration")
+
+        if isinstance(raw, str):
+            return [raw]
+
+        dates: list[str] = []
+        if isinstance(raw, list):
+            for item in raw:
+                if isinstance(item, str):
+                    dates.append(item)
+                elif isinstance(item, dict):
+                    date_value = item.get("date") or item.get("expiration")
+                    if date_value:
+                        dates.append(str(date_value))
+
+        seen: set[str] = set()
+        normalized: list[str] = []
+        for value in dates:
+            date_text = str(value).strip()
+            if date_text and date_text not in seen:
+                seen.add(date_text)
+                normalized.append(date_text)
+        return normalized
+
     async def get_expirations(self, symbol: str) -> list[str]:
         self._ensure_market_ready()
-        params = {
+        symbol = str(symbol or "").upper().strip()
+        base_params = {
             "symbol": symbol,
             "includeAllRoots": "true",
             "strikes": "false",
             "contractSize": "false",
-            "expirationType": "true",
         }
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            res = await client.get(f"{self.base_url}/markets/options/expirations", headers=self._headers(), params=params)
-            res.raise_for_status()
-            payload = res.json()
-        expirations = (((payload or {}).get("expirations") or {}).get("date")) or []
-        if isinstance(expirations, str):
-            return [expirations]
-        if isinstance(expirations, list):
-            return expirations
+            for expiration_type in ("true", "false"):
+                params = {**base_params, "expirationType": expiration_type}
+                res = await client.get(
+                    f"{self.base_url}/markets/options/expirations",
+                    headers=self._headers(),
+                    params=params,
+                )
+                res.raise_for_status()
+                dates = self._parse_expiration_payload(res.json())
+                if dates:
+                    return dates
         return []
 
     async def get_options_chain(self, symbol, expiration=None, greeks=True):
         self._ensure_market_ready()
+        symbol = str(symbol or "").upper().strip()
         if not expiration:
             expirations = await self.get_expirations(symbol)
             if not expirations:
@@ -63,7 +103,7 @@ class TradierClient:
         chain = (((payload or {}).get("options") or {}).get("option")) or []
         if isinstance(chain, dict):
             chain = [chain]
-        return chain
+        return chain if isinstance(chain, list) else []
 
     async def get_positions(self) -> list[dict]:
         self._ensure_trade_ready()

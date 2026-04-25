@@ -8,10 +8,11 @@ from services.options_order_service import OptionsOrderService
 
 
 class LiveExecutionService:
-    def __init__(self, settings_repo, execution_router, trailing_stop_service=None):
+    def __init__(self, settings_repo, execution_router, trailing_stop_service=None, risk_service=None):
         self.settings_repo = settings_repo
         self.execution_router = execution_router
         self.trailing_stop_service = trailing_stop_service
+        self.risk_service = risk_service
         self.ladder_manager = LadderManager()
         self.options_order_service = OptionsOrderService()
 
@@ -56,6 +57,13 @@ class LiveExecutionService:
         max_positions = int(profile.get("max_concurrent_positions", 0) or 0)
         if max_positions > 0 and int(open_positions_count) >= max_positions:
             return False, f"max concurrent positions reached ({max_positions})"
+        if self.risk_service is not None and hasattr(self.risk_service, "can_open_new_position"):
+            risk_allowed, risk_reason = self.risk_service.can_open_new_position(
+                trade_style=profile.get("trade_style"),
+                strategy=strategy,
+            )
+            if not risk_allowed:
+                return False, risk_reason
         return True, None
 
     async def submit_stock_ladder(
@@ -152,6 +160,10 @@ class LiveExecutionService:
         })
         if price is not None:
             payload["limit_price"] = float(price)
+        if self.risk_service is not None and hasattr(self.risk_service, "can_open_new_position"):
+            allowed, reason = self.risk_service.can_open_new_position(trade_style="options", strategy="options")
+            if not allowed:
+                return {"status": "blocked", "reason": reason, "symbol": symbol, "option_symbol": option_symbol}
         result = await self.execution_router.execute(payload)
         return result
 
@@ -174,5 +186,9 @@ class LiveExecutionService:
         })
         if price is not None:
             order["limit_price"] = float(price)
+        if self.risk_service is not None and hasattr(self.risk_service, "can_open_new_position"):
+            allowed, reason = self.risk_service.can_open_new_position(trade_style="options", strategy="options")
+            if not allowed:
+                return {"status": "blocked", "reason": reason, "symbol": symbol, "legs": [long_symbol, short_symbol]}
         result = await self.execution_router.execute(order)
         return result

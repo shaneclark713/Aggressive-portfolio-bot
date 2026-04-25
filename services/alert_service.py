@@ -7,13 +7,14 @@ from brokers.models import OrderRequest
 
 
 class AlertService:
-    def __init__(self, alert_repo, trade_repo, execution_log_repo, config_service, settings, execution_router=None):
+    def __init__(self, alert_repo, trade_repo, execution_log_repo, config_service, settings, execution_router=None, risk_service=None):
         self.alert_repo = alert_repo
         self.trade_repo = trade_repo
         self.execution_log_repo = execution_log_repo
         self.config_service = config_service
         self.settings = settings
         self.execution_router = execution_router
+        self.risk_service = risk_service
 
     def _default_broker_for_payload(self, instrument_type: str) -> str:
         preferred = getattr(self.settings, "default_stock_broker", "ALPACA")
@@ -53,6 +54,26 @@ class AlertService:
 
         instrument_type = (payload.get("instrument_type") or "stock").lower()
         broker = (payload.get("broker") or self._default_broker_for_payload(instrument_type)).upper()
+
+        if self.risk_service is not None and hasattr(self.risk_service, "can_open_new_position"):
+            trade_style = payload.get("trade_style") or payload.get("horizon") or ("options" if instrument_type == "option" else None)
+            allowed, reason = self.risk_service.can_open_new_position(trade_style=trade_style, strategy=payload.get("strategy"))
+            if not allowed:
+                self.alert_repo.update_alert_status(alert_id, "RISK_BLOCKED")
+                self.execution_log_repo.log_event(
+                    "ORDER_RISK_BLOCKED",
+                    {
+                        "alert_id": alert_id,
+                        "broker": broker,
+                        "mode": mode,
+                        "symbol": payload.get("symbol"),
+                        "strategy": payload.get("strategy"),
+                        "reason": reason,
+                        "blocked_at": datetime.utcnow().isoformat(),
+                    },
+                )
+                return
+
         order_req = self._build_order_request(alert_id, payload, broker, instrument_type)
 
         try:

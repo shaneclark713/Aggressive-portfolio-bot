@@ -19,6 +19,7 @@ class SettingsRepository:
         "ladder_spacing_pct": 0.01,
         "trail_type": "percent",
         "trail_value": 0.02,
+        "max_consecutive_losses": 3,
     }
 
     DEFAULT_SWING_TRADE_EXECUTION = {
@@ -36,6 +37,15 @@ class SettingsRepository:
         "ladder_spacing_pct": 0.02,
         "trail_type": "percent",
         "trail_value": 0.04,
+        "max_consecutive_losses": 3,
+    }
+
+    DEFAULT_OPTIONS_EXECUTION = {
+        **DEFAULT_DAY_TRADE_EXECUTION,
+        "position_mode": "options",
+        "max_concurrent_positions": 3,
+        "time_of_day_restrictor": "15:00",
+        "max_consecutive_losses": 3,
     }
 
     DEFAULT_OPTIONS_SETTINGS = {
@@ -60,6 +70,10 @@ class SettingsRepository:
         "swing_trade": "swing_trade",
         "swingtrade": "swing_trade",
         "overnight": "swing_trade",
+        "option": "options",
+        "options": "options",
+        "option_trade": "options",
+        "options_trade": "options",
     }
 
     def __init__(self, conn):
@@ -147,17 +161,19 @@ class SettingsRepository:
         return self.EXECUTION_SCOPE_ALIASES.get(raw, "day_trade")
 
     def _execution_defaults(self, scope: str) -> Dict[str, Any]:
-        return deepcopy(
-            self.DEFAULT_DAY_TRADE_EXECUTION
-            if self.normalize_execution_scope(scope) == "day_trade"
-            else self.DEFAULT_SWING_TRADE_EXECUTION
-        )
+        normalized = self.normalize_execution_scope(scope)
+        if normalized == "swing_trade":
+            return deepcopy(self.DEFAULT_SWING_TRADE_EXECUTION)
+        if normalized == "options":
+            return deepcopy(self.DEFAULT_OPTIONS_EXECUTION)
+        return deepcopy(self.DEFAULT_DAY_TRADE_EXECUTION)
 
     def get_execution_settings(self, scope: str | None = None) -> Dict[str, Any]:
         if scope is None:
             return {
                 "day_trade": self.get_execution_settings("day_trade"),
                 "swing_trade": self.get_execution_settings("swing_trade"),
+                "options": self.get_execution_settings("options"),
             }
 
         normalized_scope = self.normalize_execution_scope(scope)

@@ -64,6 +64,33 @@ class TradeRepository:
         rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
+    def get_recent_closed_trades(self, limit: int = 25) -> List[Dict[str, Any]]:
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT * FROM active_trades
+            WHERE status = 'CLOSED'
+            ORDER BY COALESCE(exit_time, entry_time) DESC, trade_id DESC
+            LIMIT ?
+            """,
+            (int(limit),),
+        )
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+
+    def get_consecutive_loss_count(self, limit: int = 50) -> int:
+        count = 0
+        for trade in self.get_recent_closed_trades(limit=limit):
+            try:
+                pnl = float(trade.get("pnl", 0) or 0)
+            except Exception:
+                pnl = 0.0
+            if pnl < 0:
+                count += 1
+                continue
+            break
+        return count
+
     def get_trade_by_id(self, trade_id: int) -> Optional[Dict[str, Any]]:
         cursor = self.conn.cursor()
         cursor.execute(

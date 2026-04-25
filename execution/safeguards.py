@@ -10,6 +10,7 @@ class ExecutionSafeguards:
         self.min_volume = int(config.get("min_volume", 500_000))
         self.max_slippage_pct = float(config.get("max_slippage_pct", 0.02))
         self.halt_check_enabled = bool(config.get("halt_check_enabled", True))
+        self.max_consecutive_losses = int(config.get("max_consecutive_losses", 0) or 0)
 
     def validate_trade(self, data: Dict[str, Any]) -> tuple[bool, str]:
         price = float(data.get("price", 0) or 0)
@@ -18,6 +19,10 @@ class ExecutionSafeguards:
         volume = int(data.get("volume", 0) or 0)
         halted = bool(data.get("halted", False))
         estimated_slippage_pct = float(data.get("estimated_slippage_pct", 0.0) or 0.0)
+        consecutive_losses = int(data.get("consecutive_losses", 0) or 0)
+
+        if self.max_consecutive_losses > 0 and consecutive_losses >= self.max_consecutive_losses:
+            return False, f"Max consecutive losses reached ({consecutive_losses}/{self.max_consecutive_losses})"
 
         if price <= 0:
             return False, "Invalid price"

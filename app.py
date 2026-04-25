@@ -49,6 +49,28 @@ async def _close_client(client) -> None:
         pass
 
 
+async def _connect_client(client) -> None:
+    if client is None:
+        return
+    try:
+        connect = getattr(client, "connect", None)
+        if connect is None:
+            return
+        result = connect()
+        if asyncio.iscoroutine(result):
+            await result
+    except Exception:
+        pass
+
+
+def _has_alpaca_credentials(client: AlpacaClient | None) -> bool:
+    return bool(client and getattr(client, "api_key", "") and getattr(client, "secret_key", ""))
+
+
+def _has_tradier_credentials(client: TradierClient | None) -> bool:
+    return bool(client and getattr(client, "token", "") and getattr(client, "account_id", ""))
+
+
 async def main() -> None:
     settings = load_settings()
     configure_logging(settings.log_level, settings.storage_path)
@@ -58,8 +80,10 @@ async def main() -> None:
     market = None
     news = None
     econ = None
-    alpaca = None
-    tradier = None
+    alpaca_paper = None
+    alpaca_live = None
+    tradier_paper = None
+    tradier_live = None
     telegram_app = None
     scheduler = None
 
@@ -84,26 +108,30 @@ async def main() -> None:
         universe_filter = UniverseFilter(market, config_service, discovery_service)
         scanner = ScannerService(market, universe_filter, router, news_client=news, econ_client=econ)
 
-        alpaca = AlpacaClient(
-            api_key=getattr(settings, "alpaca_api_key", ""),
-            secret_key=getattr(settings, "alpaca_secret_key", ""),
-            base_url=getattr(settings, "alpaca_base_url", "https://paper-api.alpaca.markets"),
+        alpaca_paper = AlpacaClient(
+            api_key=getattr(settings, "alpaca_paper_api_key", ""),
+            secret_key=getattr(settings, "alpaca_paper_secret_key", ""),
+            base_url=getattr(settings, "alpaca_paper_base_url", "https://paper-api.alpaca.markets"),
         )
-        tradier = TradierClient(
-            token=getattr(settings, "tradier_access_token", ""),
-            account_id=getattr(settings, "tradier_account_id", ""),
-            base_url=getattr(settings, "tradier_base_url", "https://api.tradier.com/v1"),
+        alpaca_live = AlpacaClient(
+            api_key=getattr(settings, "alpaca_live_api_key", ""),
+            secret_key=getattr(settings, "alpaca_live_secret_key", ""),
+            base_url=getattr(settings, "alpaca_live_base_url", "https://api.alpaca.markets"),
+        )
+        tradier_paper = TradierClient(
+            token=getattr(settings, "tradier_paper_access_token", ""),
+            account_id=getattr(settings, "tradier_paper_account_id", ""),
+            base_url=getattr(settings, "tradier_paper_base_url", "https://sandbox.tradier.com/v1"),
+        )
+        tradier_live = TradierClient(
+            token=getattr(settings, "tradier_live_access_token", ""),
+            account_id=getattr(settings, "tradier_live_account_id", ""),
+            base_url=getattr(settings, "tradier_live_base_url", "https://api.tradier.com/v1"),
         )
 
-        for client in (alpaca, tradier):
-            try:
-                connect = getattr(client, "connect", None)
-                if connect is not None:
-                    result = connect()
-                    if asyncio.iscoroutine(result):
-                        await result
-            except Exception:
-                pass
+        for client in (alpaca_paper, alpaca_live):
+            if _has_alpaca_credentials(client):
+                await _connect_client(client)
 
         sheets = GoogleSheetsLedger(
             settings.google_credentials_dict,
@@ -114,15 +142,30 @@ async def main() -> None:
         )
         sheets.connect()
 
-        execution_router = ExecutionRouter(alpaca_client=alpaca, tradier_client=tradier, config_service=config_service)
+        execution_router = ExecutionRouter(
+            alpaca_client=alpaca_live if _has_alpaca_credentials(alpaca_live) else alpaca_paper,
+            tradier_client=tradier_live if _has_tradier_credentials(tradier_live) else tradier_paper,
+            config_service=config_service,
+            alpaca_paper_client=alpaca_paper,
+            alpaca_live_client=alpaca_live,
+            tradier_paper_client=tradier_paper,
+            tradier_live_client=tradier_live,
+        )
         trailing_stop_service = TrailingStopService(settings_repo)
         live_execution_service = LiveExecutionService(
             settings_repo,
             execution_router,
             trailing_stop_service=trailing_stop_service,
         )
-        options_chain_ingest_service = OptionsChainIngestService(settings_repo, tradier)
-        position_sync_service = PositionSyncService(trailing_stop_service, alpaca_client=alpaca, tradier_client=tradier)
+
+        mode_aware_tradier = execution_router.tradier_proxy()
+        mode_aware_alpaca = execution_router.alpaca_proxy()
+        options_chain_ingest_service = OptionsChainIngestService(settings_repo, mode_aware_tradier)
+        position_sync_service = PositionSyncService(
+            trailing_stop_service,
+            alpaca_client=mode_aware_alpaca,
+            tradier_client=mode_aware_tradier,
+        )
         broker_ladder_service = BrokerLadderService(execution_router)
 
         watchlist_service = WatchlistService(universe_filter)
@@ -145,8 +188,12 @@ async def main() -> None:
             "execution_router": execution_router,
             "discovery_service": discovery_service,
             "universe_filter": universe_filter,
-            "tradier_client": tradier,
-            "alpaca_client": alpaca,
+            "tradier_client": mode_aware_tradier,
+            "tradier_paper_client": tradier_paper,
+            "tradier_live_client": tradier_live,
+            "alpaca_client": mode_aware_alpaca,
+            "alpaca_paper_client": alpaca_paper,
+            "alpaca_live_client": alpaca_live,
             "live_execution_service": live_execution_service,
             "options_chain_ingest_service": options_chain_ingest_service,
             "trailing_stop_service": trailing_stop_service,
@@ -224,8 +271,10 @@ async def main() -> None:
         await _close_client(market)
         await _close_client(news)
         await _close_client(econ)
-        await _close_client(alpaca)
-        await _close_client(tradier)
+        await _close_client(alpaca_paper)
+        await _close_client(alpaca_live)
+        await _close_client(tradier_paper)
+        await _close_client(tradier_live)
         conn.close()
 
 

@@ -101,6 +101,9 @@ def build_execution_safeguards_keyboard(settings: dict, active_style: str) -> In
             [InlineKeyboardButton(f"Max Slippage %: {_display_value(settings.get('max_slippage_pct'))}", callback_data="execedit|safeguards|max_slippage_pct")],
             [InlineKeyboardButton(f"Max Concurrent: {_display_value(settings.get('max_concurrent_positions'))}", callback_data="execedit|safeguards|max_concurrent_positions")],
             [InlineKeyboardButton(f"Max Consecutive Losses: {_display_value(settings.get('max_consecutive_losses'))}", callback_data="execedit|safeguards|max_consecutive_losses")],
+            [InlineKeyboardButton(f"Market Hours Only: {_display_value(settings.get('market_hours_only'))}", callback_data="execedit|safeguards|market_hours_only")],
+            [InlineKeyboardButton(f"Allow Premarket: {_display_value(settings.get('allow_premarket_entries'))}", callback_data="execedit|safeguards|allow_premarket_entries")],
+            [InlineKeyboardButton(f"Allow Afterhours: {_display_value(settings.get('allow_afterhours_entries'))}", callback_data="execedit|safeguards|allow_afterhours_entries")],
             [InlineKeyboardButton(f"Entry Cutoff: {_display_value(settings.get('entry_cutoff_time'))}", callback_data="execedit|safeguards|entry_cutoff_time")],
             [InlineKeyboardButton("⬅ Back", callback_data="cp|execution_menu")],
         ]

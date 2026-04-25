@@ -32,6 +32,7 @@ from services.options_chain_ingest_service import OptionsChainIngestService
 from services.trailing_stop_service import TrailingStopService
 from services.position_sync_service import PositionSyncService
 from services.broker_ladder_service import BrokerLadderService
+from services.risk_service import RiskService
 from ledger.sheets_client import GoogleSheetsLedger
 
 
@@ -152,10 +153,12 @@ async def main() -> None:
             tradier_live_client=tradier_live,
         )
         trailing_stop_service = TrailingStopService(settings_repo)
+        risk_service = RiskService(settings_repo, trade_repo, config_service)
         live_execution_service = LiveExecutionService(
             settings_repo,
             execution_router,
             trailing_stop_service=trailing_stop_service,
+            risk_service=risk_service,
         )
 
         mode_aware_tradier = execution_router.tradier_proxy()
@@ -176,6 +179,7 @@ async def main() -> None:
             config_service,
             settings,
             execution_router=execution_router,
+            risk_service=risk_service,
         )
         trade_review_service = TradeReviewService(trade_repo, settings)
 
@@ -199,6 +203,7 @@ async def main() -> None:
             "trailing_stop_service": trailing_stop_service,
             "position_sync_service": position_sync_service,
             "broker_ladder_service": broker_ladder_service,
+            "risk_service": risk_service,
         }
 
         telegram_app = build_telegram_app(

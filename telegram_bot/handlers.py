@@ -78,7 +78,7 @@ PERCENT_FIELDS = {
 INT_FIELDS = {"ladder_steps", "min_volume", "min_open_interest", "min_daily_volume", "max_concurrent_positions", "expiry_value"}
 FLOAT_FIELDS = {"atr_multiplier", "delta_min", "delta_max", "contract_min_price", "contract_max_price"}
 STR_FIELDS = {"position_mode", "trail_type", "expiry_mode", "chain_symbol", "entry_cutoff_time"}
-EXECUTION_STYLE_FIELDS = {"day_trade", "swing_trade"}
+EXECUTION_STYLE_FIELDS = {"day_trade", "swing_trade", "options"}
 DEFAULT_EXECUTION_STYLE = "day_trade"
 
 
@@ -232,6 +232,7 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
                 "profiles": {
                     "day_trade": {**defaults, **dict(profiles.get("day_trade") or {})},
                     "swing_trade": {**defaults, **dict(profiles.get("swing_trade") or {})},
+                    "options": {**defaults, "position_mode": "options", **dict(profiles.get("options") or {})},
                 },
             }
         legacy = {k: raw[k] for k in raw.keys() if k in defaults}
@@ -240,6 +241,7 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
             "profiles": {
                 "day_trade": {**defaults, **legacy},
                 "swing_trade": {**defaults, **legacy},
+                "options": {**defaults, "position_mode": "options", **legacy},
             },
         }
 
@@ -926,7 +928,10 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         if data.startswith("fcat|"):
             _clear_pending(context)
             _, profile, category = data.split("|", 2)
-            await _show_filter_category(query, profile, category)
+            if category == "options":
+                await _show_option_filters(query)
+            else:
+                await _show_filter_category(query, profile, category)
             return
         if data.startswith("fedit|"):
             _clear_pending(context)

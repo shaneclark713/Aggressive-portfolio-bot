@@ -7,6 +7,7 @@ from typing import Any, Mapping, Sequence
 EXECUTION_STYLE_LABELS = {
     "day_trade": "Day Trade",
     "swing_trade": "Swing Trade",
+    "options": "Options",
 }
 
 

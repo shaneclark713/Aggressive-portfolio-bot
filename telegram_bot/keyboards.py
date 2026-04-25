@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-VALID_FILTER_CATEGORIES = ("descriptive", "fundamental", "technical")
+VALID_FILTER_CATEGORIES = ("descriptive", "fundamental", "technical", "options")
 FILTER_PROFILES = ("overall", "premarket", "midday", "overnight")
-EXECUTION_STYLES = (("day_trade", "Day Trade"), ("swing_trade", "Swing Trade"))
+EXECUTION_STYLES = (("day_trade", "Day Trade"), ("swing_trade", "Swing Trade"), ("options", "Options"))
 
 
 def _pretty_name(value: str) -> str:

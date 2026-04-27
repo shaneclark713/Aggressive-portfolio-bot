@@ -91,13 +91,6 @@ def format_scan_status(stats: Mapping[str, Any]) -> str:
     )
 
 
-def format_profile_execution_status(mode: str, strategy: str, profile: Mapping[str, Any]) -> str:
-    lines = ["⚙ <b>Profile Execution Status</b>", "", f"<b>Mode:</b> {escape(str(mode))}", f"<b>Strategy:</b> {escape(str(strategy))}", ""]
-    for key, value in profile.items():
-        lines.append(f"<b>{escape(str(key))}:</b> {escape(str(value))}")
-    return "\n".join(lines)
-
-
 def format_chain_summary(summary: Mapping[str, Any]) -> str:
     return (
         "⛓ <b>Options Chain Summary</b>\n\n"
@@ -354,14 +347,31 @@ def format_iv_status(summary: Mapping[str, Any]) -> str:
     )
 
 
+def _fmt_number(value: Any, digits: int = 2) -> str:
+    try:
+        num = float(value)
+    except Exception:
+        return "n/a"
+    if abs(num) >= 1_000_000_000:
+        return f"{num / 1_000_000_000:.{digits}f}B"
+    if abs(num) >= 1_000_000:
+        return f"{num / 1_000_000:.{digits}f}M"
+    if abs(num) >= 1_000:
+        return f"{num:,.0f}"
+    return f"{num:.{digits}f}"
+
+
 def format_ticker_scan_result(result: Mapping[str, Any]) -> str:
     symbol = escape(str(result.get("symbol", "N/A")))
     scan_type = escape(str(result.get("scan_type", "market")).replace("_", " ").title())
     lines = [f"🎯 <b>Ticker Scan — {symbol}</b>", "", f"<b>Scan Type:</b> {scan_type}"]
 
     if result.get("error"):
-        lines.append(f"<b>Status:</b> ERROR")
-        lines.append(f"<b>Error:</b> {escape(str(result.get('error')))}")
+        lines.append("<b>Status:</b> ERROR")
+        err = str(result.get("error"))
+        if err == "empty_market_data":
+            err = "No equity OHLCV market data found. Use stock/ETF tickers here, or use Options Chain/Ticker Research for index-option symbols."
+        lines.append(f"<b>Error:</b> {escape(err)}")
         return "\n".join(lines)
 
     if "passed_filters" in result:
@@ -376,7 +386,7 @@ def format_ticker_scan_result(result: Mapping[str, Any]) -> str:
         lines.append(f"<b>Price:</b> ${_to_float(price):.2f}")
     volume = result.get("volume")
     if volume is not None:
-        lines.append(f"<b>Volume:</b> {int(_to_float(volume)):,}")
+        lines.append(f"<b>Volume:</b> {_fmt_number(volume, 0)}")
     rel_volume = result.get("relative_volume")
     if rel_volume is not None:
         lines.append(f"<b>Relative Volume:</b> {_to_float(rel_volume):.2f}x")
@@ -408,6 +418,100 @@ def format_ticker_scan_result(result: Mapping[str, Any]) -> str:
         for item in list(headlines)[:5]:
             lines.append(f"• {escape(str(item))}")
 
+    return "\n".join(lines)
+
+
+def format_ticker_research_result(payload: Mapping[str, Any]) -> str:
+    symbol = escape(str(payload.get("symbol", "N/A")))
+    scan_type = escape(str(payload.get("scan_type", "market")).replace("_", " ").title())
+    status = escape(str(payload.get("status", "UNKNOWN")))
+    scan = payload.get("scan") or {}
+    daily = payload.get("daily") or {}
+    news = payload.get("news") or {}
+    options = payload.get("options") or {}
+    option_summary = options.get("summary") or {}
+    iv = options.get("iv") or {}
+    flow = options.get("flow") or {}
+
+    lines = [f"🧭 <b>Ticker Research — {symbol}</b>", "", f"<b>Scan Type:</b> {scan_type}", f"<b>Status:</b> {status}"]
+    if payload.get("reason"):
+        lines.append(f"<b>Reason:</b> {escape(str(payload.get('reason')))}")
+
+    lines.append("")
+    lines.append("<b>Equity Scan</b>")
+    if scan.get("error"):
+        err = str(scan.get("error"))
+        if err == "empty_market_data":
+            err = "No equity OHLCV data found."
+        lines.append(f"• Error: {escape(err)}")
+    else:
+        lines.append(f"• Passed Filters: {'YES' if scan.get('passed_filters') else 'NO'}")
+        lines.append(f"• Strategy Signal: {'YES' if scan.get('strategy_signal') else 'NO'}")
+        lines.append(f"• Qualified: {'YES' if scan.get('qualified') else 'NO'}")
+        if scan.get("rejection_reason"):
+            lines.append(f"• Reason: {escape(str(scan.get('rejection_reason')))}")
+
+    lines.append("")
+    lines.append("<b>Daily Context</b>")
+    if daily.get("available"):
+        lines.append(f"• Last Close: ${_to_float(daily.get('last_close')):.2f}")
+        lines.append(f"• Volume: {_fmt_number(daily.get('latest_volume'), 0)}")
+        lines.append(f"• Rel Volume: {_to_float(daily.get('relative_volume')):.2f}x")
+        lines.append(f"• Trend: {escape(str(daily.get('trend', 'neutral')))}")
+        if daily.get("change_pct") is not None:
+            lines.append(f"• Change: {_fmt_pct(daily.get('change_pct'))}")
+        if daily.get("atr_pct") is not None:
+            lines.append(f"• ATR: {_fmt_pct(daily.get('atr_pct'))}")
+    else:
+        lines.append(f"• {escape(str(daily.get('error', 'No daily data')))}")
+
+    lines.append("")
+    lines.append("<b>Options</b>")
+    if options.get("error"):
+        lines.append(f"• {escape(str(options.get('error')))}")
+    elif option_summary:
+        lines.append(f"• Contracts: {option_summary.get('contract_count', 0)}")
+        lines.append(f"• Calls/Puts: {option_summary.get('call_count', 0)} / {option_summary.get('put_count', 0)}")
+        lines.append(f"• Total OI: {_fmt_number(option_summary.get('total_open_interest'), 0)}")
+        lines.append(f"• Total Volume: {_fmt_number(option_summary.get('total_volume'), 0)}")
+        lines.append(f"• Avg Mark: ${_to_float(option_summary.get('avg_mark')):.2f}")
+        if iv:
+            lines.append(f"• IV Regime: {escape(str(iv.get('iv_regime', 'unknown')))}")
+        if flow:
+            lines.append(f"• Flow Bias: {escape(str(flow.get('bias', 'neutral')))}")
+    else:
+        lines.append("• No options snapshot available.")
+
+    lines.append("")
+    lines.append(f"<b>News Count:</b> {news.get('news_count', 0)}")
+    headlines = news.get("headlines") or scan.get("headlines") or []
+    if headlines:
+        for item in list(headlines)[:4]:
+            lines.append(f"• {escape(str(item))}")
+
+    lines.append("")
+    lines.append("<i>Saved to ticker research history.</i>")
+    return "\n".join(lines)
+
+
+def format_ticker_history(rows: Sequence[Mapping[str, Any]], symbol: str | None = None) -> str:
+    title = f"Ticker History — {escape(symbol.upper())}" if symbol else "Ticker Research History"
+    if not rows:
+        return f"🗂 <b>{title}</b>\n\nNo saved ticker research rows yet."
+    lines = [f"🗂 <b>{title}</b>", ""]
+    for row in rows:
+        created = str(row.get("created_at", ""))[:19].replace("T", " ")
+        line = (
+            f"• {escape(str(row.get('symbol', 'N/A')))} | "
+            f"{escape(str(row.get('scan_type', 'market')))} | "
+            f"{escape(str(row.get('status', 'UNKNOWN')))} | "
+            f"price ${_to_float(row.get('price')):.2f} | "
+            f"opts {row.get('option_contracts', 0)} | "
+            f"{escape(created)}"
+        )
+        if row.get("reason"):
+            line += f" | {escape(str(row.get('reason')))}"
+        lines.append(line)
     return "\n".join(lines)
 
 def format_simple_lines(title: str, lines_in: Sequence[str]) -> str:

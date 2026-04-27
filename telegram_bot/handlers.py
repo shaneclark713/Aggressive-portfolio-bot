@@ -14,6 +14,7 @@ from services.options_flow_analyzer import OptionsFlowAnalyzer
 from services.position_sync_service import PositionSyncService
 from services.sector_analyzer import SectorAnalyzer
 from services.trailing_stop_service import TrailingStopService
+from services.ticker_research_service import TickerResearchService
 
 from .callbacks import handle_trade_callback
 from .keyboards import (
@@ -58,6 +59,8 @@ from .formatters import (
     format_scan_status,
     format_sector_status,
     format_simple_lines,
+    format_ticker_history,
+    format_ticker_research_result,
     format_ticker_scan_result,
 )
 
@@ -65,6 +68,7 @@ PENDING_FILTER_EDIT = "pending_filter_edit"
 PENDING_EXEC_EDIT = "pending_execution_edit"
 PENDING_OPTIONS_EDIT = "pending_options_edit"
 PENDING_TICKER_SCAN = "pending_ticker_scan"
+PENDING_TICKER_RESEARCH = "pending_ticker_research"
 
 PERCENT_FIELDS = {
     "risk_pct",
@@ -179,7 +183,7 @@ async def panel_command(update, context):
 
 
 async def cancel_command(update, context):
-    for key in (PENDING_FILTER_EDIT, PENDING_EXEC_EDIT, PENDING_OPTIONS_EDIT, PENDING_TICKER_SCAN):
+    for key in (PENDING_FILTER_EDIT, PENDING_EXEC_EDIT, PENDING_OPTIONS_EDIT, PENDING_TICKER_SCAN, PENDING_TICKER_RESEARCH):
         context.user_data.pop(key, None)
     await update.message.reply_text("Canceled.")
 
@@ -192,6 +196,16 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
     chain_service = OptionsChainService()
     trailing_stop_service = app_services.get("trailing_stop_service") or TrailingStopService(settings_repo)
     options_chain_ingest = app_services.get("options_chain_ingest_service") or OptionsChainIngestService(settings_repo, app_services.get("tradier_market_data_client") or app_services.get("tradier_live_client") or app_services.get("tradier_client"))
+    ticker_research_service = app_services.get("ticker_research_service") or TickerResearchService(
+        storage_path=getattr(config_service.settings, "storage_path", "./data"),
+        scanner=app_services.get("scanner"),
+        market_client=app_services.get("market_client"),
+        news_client=app_services.get("news_client"),
+        options_chain_ingest=options_chain_ingest,
+        chain_service=chain_service,
+        iv_analyzer=iv_analyzer,
+        flow_analyzer=flow_analyzer,
+    )
     live_execution_service = app_services.get("live_execution_service")
     broker_ladder_service = BrokerLadderService(app_services.get("execution_router"))
     position_sync_service = PositionSyncService(
@@ -201,7 +215,7 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
     )
 
     def _clear_pending(context) -> None:
-        for key in (PENDING_FILTER_EDIT, PENDING_EXEC_EDIT, PENDING_OPTIONS_EDIT, PENDING_TICKER_SCAN):
+        for key in (PENDING_FILTER_EDIT, PENDING_EXEC_EDIT, PENDING_OPTIONS_EDIT, PENDING_TICKER_SCAN, PENDING_TICKER_RESEARCH):
             context.user_data.pop(key, None)
 
     def _get_ui_settings(name: str, default: dict) -> dict:
@@ -583,6 +597,30 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         payload = await scanner.scan_ticker_overview(symbol, scan_type=scan_type)
         await update.message.reply_text(format_ticker_scan_result(payload), parse_mode="HTML")
 
+    async def _research_ticker(update, context):
+        if not await _authorize_update(update):
+            return
+        if not context.args:
+            await update.message.reply_text("Usage: /research_ticker <symbol> [market|premarket|midday|overnight|catalyst]")
+            return
+        symbol = context.args[0].upper()
+        scan_type = context.args[1].lower() if len(context.args) >= 2 else "market"
+        payload = await ticker_research_service.research_ticker(symbol, scan_type=scan_type, include_options=True)
+        await update.message.reply_text(format_ticker_research_result(payload), parse_mode="HTML")
+
+    async def _ticker_history(update, context):
+        if not await _authorize_update(update):
+            return
+        symbol = context.args[0].upper() if context.args else None
+        limit = 10
+        if context.args:
+            try:
+                limit = int(context.args[1]) if len(context.args) >= 2 else 10
+            except Exception:
+                limit = 10
+        rows = ticker_research_service.list_history(symbol=symbol, limit=limit)
+        await update.message.reply_text(format_ticker_history(rows, symbol=symbol), parse_mode="HTML")
+
 
     async def _submit_ladder(update, context):
         if not await _authorize_update(update):
@@ -688,7 +726,6 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         price = float(context.args[6]) if len(context.args) >= 7 else None
         result = await live_execution_service.submit_vertical_spread(symbol.upper(), long_leg.upper(), short_leg.upper(), int(qty), debit=debit, order_type=order_type, price=price)
         await update.message.reply_text(format_simple_lines("Vertical Spread Result", [str(result)]), parse_mode="HTML")
-
 
     async def _set_risk_pct(update, context):
         if not await _authorize_update(update):
@@ -804,6 +841,18 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
             await update.message.reply_text(format_ticker_scan_result(payload), parse_mode="HTML")
             return
 
+        pending_research = context.user_data.pop(PENDING_TICKER_RESEARCH, None)
+        if pending_research:
+            parts = (update.message.text or "").strip().split()
+            if not parts:
+                await update.message.reply_text("Send a ticker symbol, for example: AAPL or XSP research.")
+                return
+            symbol = parts[0].upper()
+            scan_type = parts[1].lower() if len(parts) >= 2 else pending_research.get("scan_type", "market")
+            payload = await ticker_research_service.research_ticker(symbol, scan_type=scan_type, include_options=True)
+            await update.message.reply_text(format_ticker_research_result(payload), parse_mode="HTML")
+            return
+
         pending = context.user_data.pop(PENDING_FILTER_EDIT, None)
         if pending:
             profile = pending["profile"]
@@ -856,7 +905,6 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
                 context.user_data[PENDING_OPTIONS_EDIT] = pending
                 await update.message.reply_text(f"Could not save options value: {exc}")
             return
-
 
     async def _guarded_callback(update, context):
         query = update.callback_query
@@ -913,6 +961,16 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
                 _clear_pending(context)
                 context.user_data[PENDING_TICKER_SCAN] = {"scan_type": "market"}
                 await query.message.reply_text("Send ticker symbol to scan. Examples: AAPL, NVDA premarket, TSLA catalyst. Use /cancel to stop.")
+                return
+            if action == "research_prompt":
+                _clear_pending(context)
+                context.user_data[PENDING_TICKER_RESEARCH] = {"scan_type": "market"}
+                await query.message.reply_text("Send ticker symbol for full research. Examples: AAPL, XSP, NVDA premarket, TSLA catalyst. Use /cancel to stop.")
+                return
+            if action == "history":
+                _clear_pending(context)
+                rows = ticker_research_service.list_history(limit=10)
+                await _safe_edit_message_text(query, format_ticker_history(rows), parse_mode="HTML", reply_markup=build_scan_menu_keyboard())
                 return
             if action == "status":
                 stats = scanner.get_last_scan_stats() if scanner else {}
@@ -1181,7 +1239,6 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
             await _safe_edit_message_text(query, format_iv_status(iv_analyzer.summarize_chain(_get_option_chain_rows())), parse_mode="HTML", reply_markup=build_ml_menu_keyboard())
             return
 
-
         await _safe_edit_message_text(query, "Unknown control panel action.", reply_markup=build_control_panel_keyboard())
 
     return [
@@ -1195,6 +1252,9 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         CommandHandler("refresh_option_chain", _refresh_option_chain),
         CommandHandler("chain_status", _chain_status),
         CommandHandler("scan_ticker", _scan_ticker),
+        CommandHandler("research_ticker", _research_ticker),
+        CommandHandler("ticker_research", _research_ticker),
+        CommandHandler("ticker_history", _ticker_history),
         CommandHandler("trail_status", _trail_status),
         CommandHandler("sync_positions", _sync_positions),
         CommandHandler("submit_ladder", _submit_ladder),

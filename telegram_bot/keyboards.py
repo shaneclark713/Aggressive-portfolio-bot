@@ -45,7 +45,7 @@ def build_control_panel_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton("Scans", callback_data="cp|scan_menu"), InlineKeyboardButton("Presets / Filters", callback_data="cp|presets")],
             [InlineKeyboardButton("Mode", callback_data="cp|mode"), InlineKeyboardButton("Strategies", callback_data="cp|strategies")],
             [InlineKeyboardButton("Execution", callback_data="cp|execution_menu")],
-            [InlineKeyboardButton("ML", callback_data="cp|ml_menu"), InlineKeyboardButton("Exec Profiles", callback_data="cp|exec_profiles")],
+            [InlineKeyboardButton("ML", callback_data="cp|ml_menu")],
         ]
     )
 
@@ -58,6 +58,7 @@ def build_scan_menu_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton("News", callback_data="scan|news"), InlineKeyboardButton("Events", callback_data="scan|events")],
             [InlineKeyboardButton("Catalyst", callback_data="scan|catalyst"), InlineKeyboardButton("Full Scan", callback_data="scan|full")],
             [InlineKeyboardButton("Scan Ticker", callback_data="scan|ticker_prompt")],
+            [InlineKeyboardButton("Ticker Research", callback_data="scan|research_prompt"), InlineKeyboardButton("Ticker History", callback_data="scan|history")],
             [InlineKeyboardButton("Scan Status", callback_data="scan|status"), InlineKeyboardButton("Passers", callback_data="scan|passers")],
             [InlineKeyboardButton("Refresh Snapshot", callback_data="scan|refresh_snapshot"), InlineKeyboardButton("Snapshot Status", callback_data="scan|snapshot_status")],
             [InlineKeyboardButton("⬅ Back", callback_data="cp|back")],
@@ -186,19 +187,6 @@ def build_ml_menu_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton("⬅ Back", callback_data="cp|back")],
         ]
     )
-
-
-def build_execution_profile_menu_keyboard(mode: str, strategies: list[str]) -> InlineKeyboardMarkup:
-    rows = [[InlineKeyboardButton(f"{mode}: {strategy}", callback_data=f"ep|view|{mode}|{strategy}")] for strategy in strategies]
-    rows.append([InlineKeyboardButton("⬅ Back", callback_data="cp|back")])
-    return InlineKeyboardMarkup(rows)
-
-
-def build_execution_profile_edit_keyboard(mode: str, strategy: str) -> InlineKeyboardMarkup:
-    fields = [("risk_pct", "Risk %"), ("atr_multiplier", "ATR Mult"), ("ladder_steps", "Ladder Steps"), ("ladder_spacing_pct", "Ladder Spacing"), ("trail_value", "Trail Value")]
-    rows = [[InlineKeyboardButton(label, callback_data=f"ep|edit|{mode}|{strategy}|{field}")] for field, label in fields]
-    rows.append([InlineKeyboardButton("⬅ Back", callback_data="cp|exec_profiles")])
-    return InlineKeyboardMarkup(rows)
 
 
 def build_preset_profiles_keyboard(profile_preset_map: dict[str, str], active_profile: str, options_settings: dict | None = None) -> InlineKeyboardMarkup:

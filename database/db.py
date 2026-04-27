@@ -1,30 +1,60 @@
+import logging
 import sqlite3
+from os import PathLike
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
+logger = logging.getLogger("aggressive_portfolio_bot.database.db")
 
 DEFAULT_DB_FILENAME = "trading_bot.sqlite3"
+PathInput = Optional[Union[str, PathLike[str], Path]]
 
 
-def connect_db(db_path: Optional[str] = None) -> sqlite3.Connection:
+def resolve_db_file(db_path: PathInput = None) -> Path:
+    """Resolve BOT_STORAGE_PATH into the exact SQLite database file.
+
+    Supported values:
+    - unset / empty                  -> storage/trading_bot.sqlite3
+    - /var/data                      -> /var/data/trading_bot.sqlite3
+    - /var/data/bot.db               -> /var/data/bot.db
+    - /var/data/trading_bot.sqlite3  -> /var/data/trading_bot.sqlite3
+
+    This matters on Render because only files under the attached disk mount path
+    persist across redeploys/restarts.
+    """
     if not db_path:
-        db_file = Path("storage") / DEFAULT_DB_FILENAME
-    else:
-        raw_path = Path(db_path)
+        return Path("storage") / DEFAULT_DB_FILENAME
 
-        if raw_path.suffix == ".sqlite3":
-            db_file = raw_path
-        else:
-            db_file = raw_path / DEFAULT_DB_FILENAME
+    raw_path = Path(db_path).expanduser()
 
+    # Existing directories, directory-like paths, and suffix-less paths are treated
+    # as storage folders. Paths with a suffix (.db, .sqlite, .sqlite3, etc.) are
+    # treated as the actual SQLite database file.
+    if raw_path.exists() and raw_path.is_dir():
+        return raw_path / DEFAULT_DB_FILENAME
+    if str(raw_path).endswith(("/", "\\")):
+        return raw_path / DEFAULT_DB_FILENAME
+    if raw_path.suffix:
+        return raw_path
+    return raw_path / DEFAULT_DB_FILENAME
+
+
+def connect_db(db_path: PathInput = None) -> sqlite3.Connection:
+    db_file = resolve_db_file(db_path)
     db_file.parent.mkdir(parents=True, exist_ok=True)
 
+    logger.info("Using SQLite database at %s", db_file.as_posix())
     conn = sqlite3.connect(db_file.as_posix(), check_same_thread=False)
     conn.row_factory = sqlite3.Row
+
+    # Better durability for small bot settings/trade-state writes.
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
 
-def init_db(db_path: Optional[str] = None) -> None:
+def init_db(db_path: PathInput = None) -> None:
     conn = connect_db(db_path)
     cursor = conn.cursor()
 

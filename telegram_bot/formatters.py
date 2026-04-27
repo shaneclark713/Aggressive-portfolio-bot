@@ -3,11 +3,13 @@ from __future__ import annotations
 from html import escape
 from typing import Any, Mapping, Sequence
 
+
 EXECUTION_STYLE_LABELS = {
     "day_trade": "Day Trade",
     "swing_trade": "Swing Trade",
     "options": "Options",
 }
+
 
 def _to_float(value: Any, default: float = 0.0) -> float:
     try:
@@ -15,14 +17,17 @@ def _to_float(value: Any, default: float = 0.0) -> float:
     except Exception:
         return default
 
+
 def _fmt_pct(value: Any, digits: int = 2) -> str:
     num = _to_float(value)
     if abs(num) <= 1.0:
         return f"{num * 100:.{digits}f}%"
     return f"{num:.{digits}f}%"
 
+
 def _execution_style_title(value: str | None) -> str:
     return EXECUTION_STYLE_LABELS.get(str(value or "day_trade"), str(value or "day_trade").replace("_", " ").title())
+
 
 def _format_expiry(settings: Mapping[str, Any]) -> str:
     mode = str(settings.get("expiry_mode", "weekly")).lower()
@@ -35,6 +40,7 @@ def _format_expiry(settings: Mapping[str, Any]) -> str:
         return f"{value} month{'s' if value != 1 else ''} out"
     return escape(str(mode))
 
+
 def format_daily_report(title: str, sections: Mapping[str, Sequence[str]]) -> str:
     lines = [f"<b>{escape(str(title))}</b>"]
     for heading, items in sections.items():
@@ -44,10 +50,12 @@ def format_daily_report(title: str, sections: Mapping[str, Sequence[str]]) -> st
             lines.append(f"• {escape(str(item))}")
     return "\n".join(lines)
 
+
 def format_tomorrow_plan(items: Sequence[str]) -> str:
     lines = ["<b>Tomorrow Plan</b>", ""]
     lines.extend(f"• {escape(str(item))}" for item in items)
     return "\n".join(lines)
+
 
 def format_trade_alert(payload: Mapping[str, Any]) -> str:
     symbol = escape(str(payload.get("symbol", "N/A")))
@@ -70,6 +78,7 @@ def format_trade_alert(payload: Mapping[str, Any]) -> str:
         lines.append(f"<b>Trade ID:</b> {escape(str(payload['trade_id']))}")
     return "\n".join(lines)
 
+
 def format_scan_status(stats: Mapping[str, Any]) -> str:
     return (
         "🔎 <b>Scan Status</b>\n\n"
@@ -81,6 +90,14 @@ def format_scan_status(stats: Mapping[str, Any]) -> str:
         f"<b>Errors:</b> {stats.get('errors', 0)}"
     )
 
+
+def format_profile_execution_status(mode: str, strategy: str, profile: Mapping[str, Any]) -> str:
+    lines = ["⚙ <b>Profile Execution Status</b>", "", f"<b>Mode:</b> {escape(str(mode))}", f"<b>Strategy:</b> {escape(str(strategy))}", ""]
+    for key, value in profile.items():
+        lines.append(f"<b>{escape(str(key))}:</b> {escape(str(value))}")
+    return "\n".join(lines)
+
+
 def format_chain_summary(summary: Mapping[str, Any]) -> str:
     return (
         "⛓ <b>Options Chain Summary</b>\n\n"
@@ -91,6 +108,7 @@ def format_chain_summary(summary: Mapping[str, Any]) -> str:
         f"<b>Total Volume:</b> {summary.get('total_volume', 0)}\n"
         f"<b>Avg Mark:</b> ${_to_float(summary.get('avg_mark')):.2f}"
     )
+
 
 def format_ladder_submission(result: Mapping[str, Any]) -> str:
     entries = result.get("entries", [])
@@ -117,6 +135,7 @@ def format_ladder_submission(result: Mapping[str, Any]) -> str:
         )
     return "\n".join(lines)
 
+
 def format_exit_ladder_submission(result: Mapping[str, Any]) -> str:
     exits = result.get("exits", [])
     lines = [
@@ -141,6 +160,7 @@ def format_exit_ladder_submission(result: Mapping[str, Any]) -> str:
         )
     return "\n".join(lines)
 
+
 def format_ladder_execution_result(result: Mapping[str, Any]) -> str:
     lines = [
         "📤 <b>Ladder Execution Result</b>",
@@ -162,6 +182,7 @@ def format_ladder_execution_result(result: Mapping[str, Any]) -> str:
         )
     return "\n".join(lines)
 
+
 def format_triggered_exit_result(result: Mapping[str, Any]) -> str:
     rows = result.get("results", [])
     lines = ["🧯 <b>Trailing Exit Execution</b>", "", f"<b>Triggered:</b> {result.get('triggered', 0)}", ""]
@@ -178,6 +199,7 @@ def format_triggered_exit_result(result: Mapping[str, Any]) -> str:
             lines.append(f"• {escape(str(position_id))}: {escape(str(payload.get('side')))} {payload.get('qty')} -> {escape(str(status))}")
     return "\n".join(lines)
 
+
 def format_open_trails(states: Mapping[str, Any]) -> str:
     if not states:
         return "🧷 <b>Open Trail States</b>\n\nNo trailing states stored."
@@ -191,6 +213,7 @@ def format_open_trails(states: Mapping[str, Any]) -> str:
             f"stop ${_to_float(state.get('active_stop')):.2f} | hit={state.get('stop_hit', False)}{pending}"
         )
     return "\n".join(lines)
+
 
 def format_position_sync_result(rows: Mapping[str, Any]) -> str:
     if not rows:
@@ -212,6 +235,7 @@ def format_position_sync_result(rows: Mapping[str, Any]) -> str:
         )
     return "\n".join(lines)
 
+
 def format_options_settings(settings: Mapping[str, Any]) -> str:
     return (
         "🧾 <b>Option Filters</b>\n\n"
@@ -226,6 +250,7 @@ def format_options_settings(settings: Mapping[str, Any]) -> str:
         f"<b>Chain Symbol:</b> {escape(str(settings.get('chain_symbol', 'N/A')))}"
     )
 
+
 def format_execution_settings(settings: Mapping[str, Any], style: str = "day_trade") -> str:
     return (
         f"🛡 <b>Execution Settings — {_execution_style_title(style)}</b>\n\n"
@@ -239,12 +264,16 @@ def format_execution_settings(settings: Mapping[str, Any], style: str = "day_tra
         f"<b>Max Slippage %:</b> {_fmt_pct(settings.get('max_slippage_pct', 0.02))}\n"
         f"<b>Max Concurrent Positions:</b> {settings.get('max_concurrent_positions', 3)}\n"
         f"<b>Max Consecutive Losses:</b> {settings.get('max_consecutive_losses', 3)}\n"
-        f"<b>Entry Cutoff:</b> {escape(str(settings.get('entry_cutoff_time', '15:00')))}\n"
+        f"<b>Market Hours Only:</b> {escape(str(settings.get('market_hours_only', True)))}\n"
+        f"<b>Allow Premarket:</b> {escape(str(settings.get('allow_premarket_entries', False)))}\n"
+        f"<b>Allow Afterhours:</b> {escape(str(settings.get('allow_afterhours_entries', False)))}\n"
+        f"<b>Entry Cutoff:</b> {escape(str(settings.get('entry_cutoff_time', settings.get('time_of_day_restrictor', '15:00'))))}\n"
         f"<b>Ladder Steps:</b> {settings.get('ladder_steps', 3)}\n"
         f"<b>Ladder Spacing %:</b> {_fmt_pct(settings.get('ladder_spacing_pct', 0.01))}\n"
         f"<b>Trail Type:</b> {escape(str(settings.get('trail_type', 'percent')))}\n"
         f"<b>Trail Value:</b> {_fmt_pct(settings.get('trail_value', 0.02)) if settings.get('trail_type', 'percent') == 'percent' else settings.get('trail_value', 0.02)}"
     )
+
 
 def format_execution_risk_settings(settings: Mapping[str, Any], style: str = "day_trade") -> str:
     return (
@@ -256,6 +285,7 @@ def format_execution_risk_settings(settings: Mapping[str, Any], style: str = "da
         f"<b>Position Mode:</b> {escape(str(settings.get('position_mode', 'auto')))}"
     )
 
+
 def format_execution_safeguards(settings: Mapping[str, Any], style: str = "day_trade") -> str:
     return (
         f"🛡 <b>Safeguards — {_execution_style_title(style)}</b>\n\n"
@@ -264,8 +294,12 @@ def format_execution_safeguards(settings: Mapping[str, Any], style: str = "day_t
         f"<b>Max Slippage %:</b> {_fmt_pct(settings.get('max_slippage_pct', 0.02))}\n"
         f"<b>Max Concurrent Positions:</b> {settings.get('max_concurrent_positions', 3)}\n"
         f"<b>Max Consecutive Losses:</b> {settings.get('max_consecutive_losses', 3)}\n"
-        f"<b>Entry Cutoff:</b> {escape(str(settings.get('entry_cutoff_time', '15:00')))}"
+        f"<b>Market Hours Only:</b> {escape(str(settings.get('market_hours_only', True)))}\n"
+        f"<b>Allow Premarket:</b> {escape(str(settings.get('allow_premarket_entries', False)))}\n"
+        f"<b>Allow Afterhours:</b> {escape(str(settings.get('allow_afterhours_entries', False)))}\n"
+        f"<b>Entry Cutoff:</b> {escape(str(settings.get('entry_cutoff_time', settings.get('time_of_day_restrictor', '15:00'))))}"
     )
+
 
 def format_execution_ladder(settings: Mapping[str, Any], style: str = "day_trade") -> str:
     return (
@@ -273,6 +307,7 @@ def format_execution_ladder(settings: Mapping[str, Any], style: str = "day_trade
         f"<b>Ladder Steps:</b> {settings.get('ladder_steps', 3)}\n"
         f"<b>Ladder Spacing %:</b> {_fmt_pct(settings.get('ladder_spacing_pct', 0.01))}"
     )
+
 
 def format_execution_trailing(settings: Mapping[str, Any], style: str = "day_trade") -> str:
     trail_type = str(settings.get('trail_type', 'percent'))
@@ -284,15 +319,18 @@ def format_execution_trailing(settings: Mapping[str, Any], style: str = "day_tra
         f"<b>Trail Value:</b> {shown}"
     )
 
+
 def format_ml_weights(weights: Mapping[str, Any]) -> str:
     if not weights:
         return "🧠 <b>ML Weights</b>\n\nNo weights set yet."
     return "🧠 <b>ML Weights</b>\n\n" + "\n".join(f"• {escape(str(k))}: {escape(str(v))}" for k, v in sorted(weights.items()))
 
+
 def format_sector_status(summary: Mapping[str, Any]) -> str:
     if not summary:
         return "🏭 <b>Sector Status</b>\n\nNo sector data available."
     return "🏭 <b>Sector Status</b>\n\n" + "\n".join(f"• {escape(str(k))}: {v}" for k, v in summary.items())
+
 
 def format_flow_status(summary: Mapping[str, Any]) -> str:
     return (
@@ -304,6 +342,7 @@ def format_flow_status(summary: Mapping[str, Any]) -> str:
         f"<b>Bias:</b> {escape(str(summary.get('bias', 'neutral')))}"
     )
 
+
 def format_iv_status(summary: Mapping[str, Any]) -> str:
     return (
         "📈 <b>IV Status</b>\n\n"
@@ -313,6 +352,63 @@ def format_iv_status(summary: Mapping[str, Any]) -> str:
         f"<b>Total Volume:</b> {summary.get('total_volume', 0)}\n"
         f"<b>Regime:</b> {escape(str(summary.get('iv_regime', 'unknown')))}"
     )
+
+
+def format_ticker_scan_result(result: Mapping[str, Any]) -> str:
+    symbol = escape(str(result.get("symbol", "N/A")))
+    scan_type = escape(str(result.get("scan_type", "market")).replace("_", " ").title())
+    lines = [f"🎯 <b>Ticker Scan — {symbol}</b>", "", f"<b>Scan Type:</b> {scan_type}"]
+
+    if result.get("error"):
+        lines.append(f"<b>Status:</b> ERROR")
+        lines.append(f"<b>Error:</b> {escape(str(result.get('error')))}")
+        return "\n".join(lines)
+
+    if "passed_filters" in result:
+        lines.append(f"<b>Passed Filters:</b> {'YES' if result.get('passed_filters') else 'NO'}")
+    if "strategy_signal" in result:
+        lines.append(f"<b>Strategy Signal:</b> {'YES' if result.get('strategy_signal') else 'NO'}")
+    if "qualified" in result:
+        lines.append(f"<b>Qualified:</b> {'YES' if result.get('qualified') else 'NO'}")
+
+    price = result.get("price")
+    if price is not None:
+        lines.append(f"<b>Price:</b> ${_to_float(price):.2f}")
+    volume = result.get("volume")
+    if volume is not None:
+        lines.append(f"<b>Volume:</b> {int(_to_float(volume)):,}")
+    rel_volume = result.get("relative_volume")
+    if rel_volume is not None:
+        lines.append(f"<b>Relative Volume:</b> {_to_float(rel_volume):.2f}x")
+    atr_pct = result.get("atr_pct")
+    if atr_pct is not None:
+        lines.append(f"<b>ATR %:</b> {_fmt_pct(atr_pct)}")
+    gap_pct = result.get("gap_pct")
+    if gap_pct is not None:
+        lines.append(f"<b>Gap %:</b> {_fmt_pct(gap_pct)}")
+
+    setup = result.get("setup") or result.get("strategy")
+    if setup:
+        lines.append(f"<b>Setup:</b> {escape(str(setup))}")
+    side = result.get("side") or result.get("action")
+    if side:
+        lines.append(f"<b>Side:</b> {escape(str(side))}")
+
+    rejection = result.get("rejection_reason")
+    if rejection:
+        lines.append(f"<b>Reason:</b> {escape(str(rejection))}")
+
+    news_count = result.get("news_count")
+    if news_count is not None:
+        lines.append(f"<b>News Count:</b> {news_count}")
+    headlines = result.get("headlines") or result.get("catalyst_headlines") or []
+    if headlines:
+        lines.append("")
+        lines.append("<b>Headlines:</b>")
+        for item in list(headlines)[:5]:
+            lines.append(f"• {escape(str(item))}")
+
+    return "\n".join(lines)
 
 def format_simple_lines(title: str, lines_in: Sequence[str]) -> str:
     lines = [f"<b>{escape(str(title))}</b>", ""]

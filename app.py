@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from config.settings import load_settings
 from config.logging_config import configure_logging
 from core.scheduler import build_scheduler, register_jobs
-from database.db import connect_db
+from database.db import connect_db, resolve_db_file
 from database.migrations import run_migrations
 from database.repositories import TradeRepository, AlertRepository, ExecutionLogRepository
 from database.settings_repository import SettingsRepository
@@ -34,6 +35,8 @@ from services.position_sync_service import PositionSyncService
 from services.broker_ladder_service import BrokerLadderService
 from services.risk_service import RiskService
 from ledger.sheets_client import GoogleSheetsLedger
+
+logger = logging.getLogger("aggressive_portfolio_bot.app")
 
 
 async def _close_client(client) -> None:
@@ -74,9 +77,15 @@ def _has_tradier_credentials(client: TradierClient | None) -> bool:
 
 async def main() -> None:
     settings = load_settings()
-    configure_logging(settings.log_level, settings.storage_path)
-    run_migrations(settings.storage_path)
-    conn = connect_db(settings.storage_path)
+    db_file = resolve_db_file(settings.storage_path)
+    storage_dir = db_file.parent
+
+    configure_logging(settings.log_level, storage_dir)
+    logger.info("BOT_STORAGE_PATH=%s", settings.storage_path)
+    logger.info("Resolved persistent SQLite database file: %s", db_file)
+
+    run_migrations(db_file)
+    conn = connect_db(db_file)
 
     market = None
     news = None

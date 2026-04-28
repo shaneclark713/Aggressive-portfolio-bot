@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 
 from config.settings import load_settings
 from config.logging_config import configure_logging
 from core.scheduler import build_scheduler, register_jobs
-from database.db import connect_db, resolve_db_file
+from database.db import connect_db
 from database.migrations import run_migrations
 from database.repositories import TradeRepository, AlertRepository, ExecutionLogRepository
 from database.settings_repository import SettingsRepository
@@ -33,10 +32,7 @@ from services.options_chain_ingest_service import OptionsChainIngestService
 from services.trailing_stop_service import TrailingStopService
 from services.position_sync_service import PositionSyncService
 from services.broker_ladder_service import BrokerLadderService
-from services.risk_service import RiskService
 from ledger.sheets_client import GoogleSheetsLedger
-
-logger = logging.getLogger("aggressive_portfolio_bot.app")
 
 
 async def _close_client(client) -> None:
@@ -53,47 +49,17 @@ async def _close_client(client) -> None:
         pass
 
 
-async def _connect_client(client) -> None:
-    if client is None:
-        return
-    try:
-        connect = getattr(client, "connect", None)
-        if connect is None:
-            return
-        result = connect()
-        if asyncio.iscoroutine(result):
-            await result
-    except Exception:
-        pass
-
-
-def _has_alpaca_credentials(client: AlpacaClient | None) -> bool:
-    return bool(client and getattr(client, "api_key", "") and getattr(client, "secret_key", ""))
-
-
-def _has_tradier_credentials(client: TradierClient | None) -> bool:
-    return bool(client and getattr(client, "token", "") and getattr(client, "account_id", ""))
-
-
 async def main() -> None:
     settings = load_settings()
-    db_file = resolve_db_file(settings.storage_path)
-    storage_dir = db_file.parent
-
-    configure_logging(settings.log_level, storage_dir)
-    logger.info("BOT_STORAGE_PATH=%s", settings.storage_path)
-    logger.info("Resolved persistent SQLite database file: %s", db_file)
-
-    run_migrations(db_file)
-    conn = connect_db(db_file)
+    configure_logging(settings.log_level, settings.storage_path)
+    run_migrations(settings.storage_path)
+    conn = connect_db(settings.storage_path)
 
     market = None
     news = None
     econ = None
-    alpaca_paper = None
-    alpaca_live = None
-    tradier_paper = None
-    tradier_live = None
+    alpaca = None
+    tradier = None
     telegram_app = None
     scheduler = None
 
@@ -118,30 +84,26 @@ async def main() -> None:
         universe_filter = UniverseFilter(market, config_service, discovery_service)
         scanner = ScannerService(market, universe_filter, router, news_client=news, econ_client=econ)
 
-        alpaca_paper = AlpacaClient(
-            api_key=getattr(settings, "alpaca_paper_api_key", ""),
-            secret_key=getattr(settings, "alpaca_paper_secret_key", ""),
-            base_url=getattr(settings, "alpaca_paper_base_url", "https://paper-api.alpaca.markets"),
+        alpaca = AlpacaClient(
+            api_key=getattr(settings, "alpaca_api_key", ""),
+            secret_key=getattr(settings, "alpaca_secret_key", ""),
+            base_url=getattr(settings, "alpaca_base_url", "https://paper-api.alpaca.markets"),
         )
-        alpaca_live = AlpacaClient(
-            api_key=getattr(settings, "alpaca_live_api_key", ""),
-            secret_key=getattr(settings, "alpaca_live_secret_key", ""),
-            base_url=getattr(settings, "alpaca_live_base_url", "https://api.alpaca.markets"),
-        )
-        tradier_paper = TradierClient(
-            token=getattr(settings, "tradier_paper_access_token", ""),
-            account_id=getattr(settings, "tradier_paper_account_id", ""),
-            base_url=getattr(settings, "tradier_paper_base_url", "https://sandbox.tradier.com/v1"),
-        )
-        tradier_live = TradierClient(
-            token=getattr(settings, "tradier_live_access_token", ""),
-            account_id=getattr(settings, "tradier_live_account_id", ""),
-            base_url=getattr(settings, "tradier_live_base_url", "https://api.tradier.com/v1"),
+        tradier = TradierClient(
+            token=getattr(settings, "tradier_access_token", ""),
+            account_id=getattr(settings, "tradier_account_id", ""),
+            base_url=getattr(settings, "tradier_base_url", "https://api.tradier.com/v1"),
         )
 
-        for client in (alpaca_paper, alpaca_live):
-            if _has_alpaca_credentials(client):
-                await _connect_client(client)
+        for client in (alpaca, tradier):
+            try:
+                connect = getattr(client, "connect", None)
+                if connect is not None:
+                    result = connect()
+                    if asyncio.iscoroutine(result):
+                        await result
+            except Exception:
+                pass
 
         sheets = GoogleSheetsLedger(
             settings.google_credentials_dict,
@@ -152,35 +114,15 @@ async def main() -> None:
         )
         sheets.connect()
 
-        execution_router = ExecutionRouter(
-            alpaca_client=alpaca_live if _has_alpaca_credentials(alpaca_live) else alpaca_paper,
-            tradier_client=tradier_live if _has_tradier_credentials(tradier_live) else tradier_paper,
-            config_service=config_service,
-            alpaca_paper_client=alpaca_paper,
-            alpaca_live_client=alpaca_live,
-            tradier_paper_client=tradier_paper,
-            tradier_live_client=tradier_live,
-        )
+        execution_router = ExecutionRouter(alpaca_client=alpaca, tradier_client=tradier, config_service=config_service)
         trailing_stop_service = TrailingStopService(settings_repo)
-        risk_service = RiskService(settings_repo, trade_repo, config_service)
         live_execution_service = LiveExecutionService(
             settings_repo,
             execution_router,
             trailing_stop_service=trailing_stop_service,
-            risk_service=risk_service,
         )
-
-        mode_aware_tradier = execution_router.tradier_proxy()
-        mode_aware_alpaca = execution_router.alpaca_proxy()
-        # Market-data reads should prefer live Tradier data even when execution mode is Paper.
-        # Paper mode still routes orders to sandbox through ExecutionRouter.
-        tradier_market_data = tradier_live if _has_tradier_credentials(tradier_live) else mode_aware_tradier
-        options_chain_ingest_service = OptionsChainIngestService(settings_repo, tradier_market_data)
-        position_sync_service = PositionSyncService(
-            trailing_stop_service,
-            alpaca_client=mode_aware_alpaca,
-            tradier_client=mode_aware_tradier,
-        )
+        options_chain_ingest_service = OptionsChainIngestService(settings_repo, tradier)
+        position_sync_service = PositionSyncService(trailing_stop_service, alpaca_client=alpaca, tradier_client=tradier)
         broker_ladder_service = BrokerLadderService(execution_router)
 
         watchlist_service = WatchlistService(universe_filter)
@@ -191,7 +133,6 @@ async def main() -> None:
             config_service,
             settings,
             execution_router=execution_router,
-            risk_service=risk_service,
         )
         trade_review_service = TradeReviewService(trade_repo, settings)
 
@@ -204,19 +145,13 @@ async def main() -> None:
             "execution_router": execution_router,
             "discovery_service": discovery_service,
             "universe_filter": universe_filter,
-            "tradier_client": mode_aware_tradier,
-            "tradier_market_data_client": tradier_market_data,
-            "tradier_paper_client": tradier_paper,
-            "tradier_live_client": tradier_live,
-            "alpaca_client": mode_aware_alpaca,
-            "alpaca_paper_client": alpaca_paper,
-            "alpaca_live_client": alpaca_live,
+            "tradier_client": tradier,
+            "alpaca_client": alpaca,
             "live_execution_service": live_execution_service,
             "options_chain_ingest_service": options_chain_ingest_service,
             "trailing_stop_service": trailing_stop_service,
             "position_sync_service": position_sync_service,
             "broker_ladder_service": broker_ladder_service,
-            "risk_service": risk_service,
         }
 
         telegram_app = build_telegram_app(
@@ -242,8 +177,8 @@ async def main() -> None:
             telegram_app,
             settings.telegram_admin_chat_id,
             news,
-            None,
-            None,
+            mode_aware_alpaca,
+            mode_aware_tradier,
             trade_repo,
             trade_review_service,
         )
@@ -289,10 +224,8 @@ async def main() -> None:
         await _close_client(market)
         await _close_client(news)
         await _close_client(econ)
-        await _close_client(alpaca_paper)
-        await _close_client(alpaca_live)
-        await _close_client(tradier_paper)
-        await _close_client(tradier_live)
+        await _close_client(alpaca)
+        await _close_client(tradier)
         conn.close()
 
 

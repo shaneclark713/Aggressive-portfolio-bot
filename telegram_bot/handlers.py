@@ -579,7 +579,7 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
     async def _sync_positions(update, context):
         if not await _authorize_update(update):
             return
-        rows = await position_sync_service.sync_live_positions(include_demo_fallback=True)
+        rows = await position_sync_service.sync_live_positions(include_demo_fallback=False)
         await update.message.reply_text(format_position_sync_result(rows), parse_mode="HTML")
 
     async def _scan_ticker(update, context):
@@ -977,8 +977,19 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
                 await _safe_edit_message_text(query, format_scan_status(stats), parse_mode="HTML", reply_markup=build_scan_menu_keyboard())
                 return
             if action == "passers":
-                rows = await discovery.get_passing_symbols("market", force_refresh=False) if discovery else []
-                await _safe_edit_message_text(query, format_simple_lines("Passing Symbols", rows[:20] or ["No symbols available."]), parse_mode="HTML", reply_markup=build_scan_menu_keyboard())
+                universe_filter = app_services.get("universe_filter")
+                rich_rows = universe_filter.get_last_passers() if universe_filter and hasattr(universe_filter, "get_last_passers") else []
+                if rich_rows:
+                    lines = []
+                    for row in rich_rows[:20]:
+                        lines.append(
+                            f"{row.get('symbol', 'N/A')} | price={row.get('price', 'n/a')} | "
+                            f"rel_vol={row.get('relative_volume', 'n/a')} | atr%={row.get('atr_pct', 'n/a')}"
+                        )
+                else:
+                    rows = await discovery.get_passing_symbols("market", force_refresh=False) if discovery else []
+                    lines = rows[:20]
+                await _safe_edit_message_text(query, format_simple_lines("Passing Symbols", lines or ["No symbols available. Run Market Scan or Refresh Snapshot first."]), parse_mode="HTML", reply_markup=build_scan_menu_keyboard())
                 return
             if action == "refresh_snapshot":
                 if discovery is None:
@@ -986,8 +997,20 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
                     return
                 profile = _get_active_filter_profile_safe()
                 snapshot = await discovery.get_snapshot(profile, force_refresh=True)
+                reason_lines = []
+                skip_reasons = snapshot.get("skip_reasons") or {}
+                if isinstance(skip_reasons, dict):
+                    reason_lines = [f"{key}: {value}" for key, value in list(skip_reasons.items())[:6]]
                 await _safe_edit_message_text(query, 
-                    format_simple_lines("Snapshot Refreshed", [f"Profile: {profile}", f"Rows: {snapshot.get('row_count', len(snapshot.get('rows', [])))}"]),
+                    format_simple_lines(
+                        "Snapshot Refreshed",
+                        [
+                            f"Profile: {profile}",
+                            f"Raw symbols: {snapshot.get('raw_count', 'n/a')}",
+                            f"Rows: {snapshot.get('row_count', len(snapshot.get('rows', [])))}",
+                            f"Skipped: {snapshot.get('skipped', 0)}",
+                        ] + (["Skip reasons:"] + reason_lines if reason_lines else []),
+                    ),
                     parse_mode="HTML",
                     reply_markup=build_scan_menu_keyboard(),
                 )
@@ -998,7 +1021,18 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
                     return
                 profile = _get_active_filter_profile_safe()
                 status = await discovery.snapshot_status(profile)
-                lines = [f"Profile: {status.get('profile')}", f"Rows: {status.get('row_count', 0)}", f"Source: {status.get('source', 'unknown')}", f"Created: {status.get('created_at', 'unknown')}"]
+                lines = [
+                    f"Profile: {status.get('profile')}",
+                    f"Raw symbols: {status.get('raw_count', 'n/a')}",
+                    f"Rows: {status.get('row_count', 0)}",
+                    f"Skipped: {status.get('skipped', 0)}",
+                    f"Source: {status.get('source', 'unknown')}",
+                    f"Created: {status.get('created_at', 'unknown')}",
+                ]
+                skip_reasons = status.get("skip_reasons") or {}
+                if isinstance(skip_reasons, dict) and skip_reasons:
+                    lines.append("Skip reasons:")
+                    lines.extend(f"{key}: {value}" for key, value in list(skip_reasons.items())[:6])
                 await _safe_edit_message_text(query, format_simple_lines("Snapshot Status", lines), parse_mode="HTML", reply_markup=build_scan_menu_keyboard())
                 return
             if scanner is None:

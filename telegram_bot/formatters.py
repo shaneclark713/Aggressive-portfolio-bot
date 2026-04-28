@@ -80,16 +80,42 @@ def format_trade_alert(payload: Mapping[str, Any]) -> str:
 
 
 def format_scan_status(stats: Mapping[str, Any]) -> str:
-    return (
-        "🔎 <b>Scan Status</b>\n\n"
-        f"<b>Universe Loaded:</b> {stats.get('universe_loaded', 0)}\n"
-        f"<b>Passed Filters:</b> {stats.get('passed_universe_filters', 0)}\n"
-        f"<b>Evaluated:</b> {stats.get('evaluated', 0)}\n"
-        f"<b>Qualified:</b> {stats.get('qualified', 0)}\n"
-        f"<b>Rate Limited:</b> {stats.get('rate_limited', 0)}\n"
-        f"<b>Errors:</b> {stats.get('errors', 0)}"
-    )
+    def _line_value(key: str, default: Any = 0) -> Any:
+        return stats.get(key, default)
 
+    lines = [
+        "🔎 <b>Scan Status</b>",
+        "",
+        f"<b>Profile:</b> {escape(str(stats.get('profile', stats.get('scan_type', 'n/a'))))}",
+        f"<b>Universe Loaded:</b> {_line_value('universe_loaded')}",
+        f"<b>Discovery Candidates:</b> {_line_value('discovery_candidates', _line_value('symbols_considered', 0))}",
+        f"<b>Lightweight Passers:</b> {_line_value('lightweight_watchlist_count', _line_value('passed_universe_filters', 0))}",
+        f"<b>Heavy Rejections:</b> {_line_value('heavy_rejections', 0)}",
+        f"<b>Empty Market Data:</b> {_line_value('empty_data', 0)}",
+        f"<b>Strategy Evaluated:</b> {_line_value('evaluated', 0)}",
+        f"<b>No Strategy Signal:</b> {_line_value('no_signal', 0)}",
+        f"<b>Qualified:</b> {_line_value('qualified', 0)}",
+        f"<b>Rate Limited:</b> {_line_value('rate_limited', 0)}",
+        f"<b>Errors:</b> {_line_value('errors', 0)}",
+    ]
+
+    rejection_counts = stats.get("rejection_counts") or stats.get("rejection_breakdown") or {}
+    if isinstance(rejection_counts, Mapping) and rejection_counts:
+        lines.append("")
+        lines.append("<b>Rejection Breakdown</b>")
+        for reason, count in sorted(rejection_counts.items(), key=lambda item: str(item[0]))[:8]:
+            lines.append(f"• {escape(str(reason))}: {escape(str(count))}")
+
+    examples = stats.get("error_examples") or stats.get("rejected_examples") or []
+    if isinstance(examples, Mapping):
+        examples = [f"{key}: {value}" for key, value in list(examples.items())[:8]]
+    if examples:
+        lines.append("")
+        lines.append("<b>Examples</b>")
+        for item in list(examples)[:8]:
+            lines.append(f"• {escape(str(item))}")
+
+    return "\n".join(lines)
 
 def format_chain_summary(summary: Mapping[str, Any]) -> str:
     return (

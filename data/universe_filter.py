@@ -51,13 +51,18 @@ class UniverseFilter:
         technical = filters["technical"]
         candidate_rows = await self.discovery_service.get_candidate_rows(scan_type, force_refresh=force_refresh)
         discovery_count = len(candidate_rows)
-        shortlisted = []
-        swing_trade_equities = []
+        shortlisted: List[str] = []
+        swing_trade_equities: List[str] = []
         fetched = passed_day = passed_swing = errors = rate_limited = 0
-        rejected = {}
-        metric_snapshot = {}
+        rejected: Dict[str, str] = {}
+        rejection_counts: Dict[str, int] = {}
+        metric_snapshot: Dict[str, Dict[str, Any]] = {}
         self._last_passers = []
         shortlist_cap = int(descriptive.get("shortlist_cap", 8) or 8)
+
+        def reject(symbol: str, reason: str) -> None:
+            rejected[symbol] = reason
+            rejection_counts[reason] = rejection_counts.get(reason, 0) + 1
 
         for row in candidate_rows:
             symbol = row["symbol"]
@@ -67,17 +72,25 @@ class UniverseFilter:
                 errors += 1
                 if "rate_limited" in str(exc).lower() or "429" in str(exc):
                     rate_limited += 1
-                rejected[symbol] = f"fetch_error: {exc}"
+                    reject(symbol, "rate_limited")
+                else:
+                    reject(symbol, f"fetch_error: {exc.__class__.__name__}")
                 logger.warning("[%s] Dynamic universe fetch failed: %s", symbol, exc)
                 continue
-            if daily_df.empty or len(daily_df) < 20:
-                rejected[symbol] = "insufficient_daily_data"
+
+            if daily_df.empty:
+                reject(symbol, "empty_daily_data")
                 continue
+            if len(daily_df) < 20:
+                reject(symbol, "insufficient_daily_data")
+                continue
+
             fetched += 1
             metrics = self._compute_metrics(daily_df, symbol)
             if not metrics:
-                rejected[symbol] = "metric_calc_failed"
+                reject(symbol, "metric_calc_failed")
                 continue
+
             metric_snapshot[symbol] = {
                 "price": round(metrics["price"], 2),
                 "relative_volume": round(metrics["relative_volume"], 2),
@@ -85,15 +98,20 @@ class UniverseFilter:
                 "gap_pct": round(metrics["gap_pct"] * 100, 2),
                 "day_dollar_volume": round(row.get("day_dollar_volume", 0), 2),
             }
-            if self._passes_lightweight_filters(metrics, descriptive, technical):
+
+            day_reasons = self._lightweight_rejection_reasons(metrics, descriptive, technical)
+            if not day_reasons:
                 shortlisted.append(symbol)
                 passed_day += 1
                 self._last_passers.append({"symbol": symbol, **metric_snapshot[symbol]})
             else:
-                rejected[symbol] = "failed_lightweight_thresholds"
-            if self._passes_lightweight_filters(metrics, descriptive, technical, swing=True):
+                reject(symbol, ",".join(day_reasons[:3]))
+
+            swing_reasons = self._lightweight_rejection_reasons(metrics, descriptive, technical, swing=True)
+            if not swing_reasons:
                 swing_trade_equities.append(symbol)
                 passed_swing += 1
+
             if len(shortlisted) >= shortlist_cap:
                 break
 
@@ -110,6 +128,7 @@ class UniverseFilter:
             "errors": errors,
             "rate_limited": rate_limited,
             "rejected_examples": dict(list(rejected.items())[:10]),
+            "rejection_counts": dict(sorted(rejection_counts.items(), key=lambda item: (-item[1], item[0]))),
             "metric_snapshot": dict(list(metric_snapshot.items())[:10]),
             "source": "dynamic_market_snapshot",
         }
@@ -168,16 +187,25 @@ class UniverseFilter:
         rel = float(latest["volume"] / avg_volume) if avg_volume else 0.0
         return {"symbol": symbol, "price": float(latest["close"]), "avg_daily_volume": avg_volume, "avg_dollar_volume": avg_dollar, "relative_volume": rel, "atr_pct": atr_pct, "gap_pct": gap_pct}
 
-    def _passes_lightweight_filters(self, metrics: Dict[str, Any], descriptive: Dict[str, Any], technical: Dict[str, Any], swing: bool = False) -> bool:
+    def _lightweight_rejection_reasons(self, metrics: Dict[str, Any], descriptive: Dict[str, Any], technical: Dict[str, Any], swing: bool = False) -> List[str]:
+        reasons: List[str] = []
         max_gap_pct = float(technical.get("premarket_gap_max_pct", 12.0)) / 100.0
-        return (
-            metrics["price"] >= float(descriptive.get("price_min", 0))
-            and metrics["avg_daily_volume"] >= float(descriptive.get("avg_daily_volume_min", 0))
-            and metrics["avg_dollar_volume"] >= float(descriptive.get("avg_dollar_volume_min", 0))
-            and metrics["relative_volume"] >= float(technical.get("volume_vs_average_min_ratio", 1.0))
-            and metrics["atr_pct"] >= float(technical.get("atr_min_pct", 0))
-            and metrics["gap_pct"] <= max_gap_pct
-        )
+        if metrics["price"] < float(descriptive.get("price_min", 0)):
+            reasons.append("price_below_min")
+        if metrics["avg_daily_volume"] < float(descriptive.get("avg_daily_volume_min", 0)):
+            reasons.append("avg_daily_volume_below_min")
+        if metrics["avg_dollar_volume"] < float(descriptive.get("avg_dollar_volume_min", 0)):
+            reasons.append("avg_dollar_volume_below_min")
+        if metrics["relative_volume"] < float(technical.get("volume_vs_average_min_ratio", 1.0)):
+            reasons.append("relative_volume_below_min")
+        if metrics["atr_pct"] < float(technical.get("atr_min_pct", 0)):
+            reasons.append("atr_below_min")
+        if metrics["gap_pct"] > max_gap_pct:
+            reasons.append("gap_above_max")
+        return reasons
+
+    def _passes_lightweight_filters(self, metrics: Dict[str, Any], descriptive: Dict[str, Any], technical: Dict[str, Any], swing: bool = False) -> bool:
+        return not self._lightweight_rejection_reasons(metrics, descriptive, technical, swing=swing)
 
     def _calculate_atr(self, df: pd.DataFrame, period: int = 14) -> pd.Series:
         high_low = df["high"] - df["low"]

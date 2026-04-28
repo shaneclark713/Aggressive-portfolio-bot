@@ -133,37 +133,54 @@ class DiscoveryService:
         raw = await self.market_client.get_full_market_snapshot()
         rows: List[Dict[str, Any]] = []
         skipped = 0
+        skip_reasons: Dict[str, int] = {}
+
+        def skip(reason: str) -> None:
+            nonlocal skipped
+            skipped += 1
+            skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
 
         for item in raw:
             parsed = self._parse_snapshot_row(item)
             if parsed is None:
-                skipped += 1
+                skip("unparseable_or_missing_price")
                 continue
             if parsed["price"] <= 0.25:
-                skipped += 1
+                skip("price_below_floor")
                 continue
             if parsed["day_volume"] <= 0:
-                skipped += 1
+                skip("zero_day_volume")
                 continue
             rows.append(parsed)
 
         payload = {
             "profile": profile,
             "created_at": datetime.now(timezone.utc).isoformat(),
+            "raw_count": len(raw),
             "row_count": len(rows),
             "skipped": skipped,
+            "skip_reasons": skip_reasons,
             "rows": rows,
         }
         self._save_snapshot(profile, payload)
         self._last_status[profile] = {
             "profile": profile,
             "created_at": payload["created_at"],
+            "raw_count": len(raw),
             "row_count": len(rows),
             "skipped": skipped,
+            "skip_reasons": skip_reasons,
             "source": "full_market_snapshot",
             "refresh_reason": "manual_or_stale",
         }
-        logger.info("Built discovery snapshot for profile=%s rows=%s skipped=%s", profile, len(rows), skipped)
+        logger.info(
+            "Built discovery snapshot for profile=%s raw=%s rows=%s skipped=%s reasons=%s",
+            profile,
+            len(raw),
+            len(rows),
+            skipped,
+            skip_reasons,
+        )
         return payload
 
     async def get_snapshot(self, profile: str, force_refresh: bool = False) -> Dict[str, Any]:

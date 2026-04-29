@@ -26,7 +26,6 @@ from .keyboards import (
     build_execution_trailing_keyboard,
     build_filter_categories_keyboard,
     build_filter_fields_keyboard,
-    build_filter_profile_menu_keyboard,
     build_ml_menu_keyboard,
     build_mode_keyboard,
     build_options_expiry_keyboard,
@@ -34,7 +33,6 @@ from .keyboards import (
     build_position_mode_keyboard,
     build_preset_profiles_keyboard,
     build_profile_preset_keyboard,
-    build_presets_keyboard,
     build_scan_menu_keyboard,
     build_strategies_keyboard,
     build_trail_type_keyboard,
@@ -230,117 +228,27 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         settings_repo.set_filter_override(_meta_key(name), json.dumps(payload))
         return payload
 
-    def _normalize_execution_settings(raw: dict | None) -> dict:
-        defaults = {
-            "risk_pct": 0.01,
-            "atr_multiplier": 1.0,
-            "position_mode": "auto",
-            "take_profit": 0.05,
-            "stop_loss": 0.02,
-            "max_spread_pct": 0.03,
-            "min_volume": 500000,
-            "max_slippage_pct": 0.02,
-            "max_concurrent_positions": 3,
-            "max_consecutive_losses": 3,
-            "market_hours_only": True,
-            "allow_premarket_entries": False,
-            "allow_afterhours_entries": False,
-            "entry_cutoff_time": "15:00",
-            "time_of_day_restrictor": "15:00",
-            "market_timezone": "America/New_York",
-            "premarket_start_time": "04:00",
-            "regular_market_open_time": "09:30",
-            "regular_market_close_time": "16:00",
-            "afterhours_end_time": "20:00",
-            "ladder_steps": 3,
-            "ladder_spacing_pct": 0.01,
-            "trail_type": "percent",
-            "trail_value": 0.02,
-        }
-        raw = dict(raw or {})
-        if "profiles" in raw:
-            profiles = raw.get("profiles") or {}
-            return {
-                "active_profile": raw.get("active_profile") or DEFAULT_EXECUTION_STYLE,
-                "profiles": {
-                    "day_trade": {**defaults, **dict(profiles.get("day_trade") or {})},
-                    "swing_trade": {**defaults, **dict(profiles.get("swing_trade") or {})},
-                    "options": {**defaults, "position_mode": "options", **dict(profiles.get("options") or {})},
-                },
-            }
-        legacy = {k: raw[k] for k in raw.keys() if k in defaults}
-        return {
-            "active_profile": raw.get("active_profile") or DEFAULT_EXECUTION_STYLE,
-            "profiles": {
-                "day_trade": {**defaults, **legacy},
-                "swing_trade": {**defaults, **legacy},
-                "options": {**defaults, **legacy, "position_mode": "options"},
-            },
-        }
-
-    def _get_execution_settings_blob() -> dict:
-        return _normalize_execution_settings(_get_ui_settings("execution_settings", {}))
-
     def _get_active_execution_style() -> str:
-        return _get_execution_settings_blob().get("active_profile", DEFAULT_EXECUTION_STYLE)
+        style = settings_repo.get("active_execution_style", DEFAULT_EXECUTION_STYLE)
+        return style if style in EXECUTION_STYLE_FIELDS else DEFAULT_EXECUTION_STYLE
 
     def _set_active_execution_style(style: str) -> None:
-        style = style if style in EXECUTION_STYLE_FIELDS else DEFAULT_EXECUTION_STYLE
-        blob = _get_execution_settings_blob()
-        blob["active_profile"] = style
-        _set_ui_settings("execution_settings", blob)
+        settings_repo.set("active_execution_style", style if style in EXECUTION_STYLE_FIELDS else DEFAULT_EXECUTION_STYLE)
 
     def _get_execution_settings(style: str | None = None) -> dict:
-        blob = _get_execution_settings_blob()
-        active = style or blob.get("active_profile", DEFAULT_EXECUTION_STYLE)
-        return dict(blob["profiles"].get(active, blob["profiles"][DEFAULT_EXECUTION_STYLE]))
+        active = style or _get_active_execution_style()
+        return dict(settings_repo.get_execution_settings(active))
 
     def _update_execution_settings(style: str | None = None, **updates) -> dict:
-        blob = _get_execution_settings_blob()
-        active = style or blob.get("active_profile", DEFAULT_EXECUTION_STYLE)
-        existing = dict(blob["profiles"].get(active, {}))
-        existing.update(updates)
-        blob["profiles"][active] = existing
-        blob["active_profile"] = active
-        _set_ui_settings("execution_settings", blob)
-        return dict(existing)
-
-    def _normalize_options_settings(raw: dict | None) -> dict:
-        defaults = {
-            "enabled": False,
-            "delta_min": 0.30,
-            "delta_max": 0.70,
-            "min_open_interest": 1000,
-            "min_daily_volume": 250,
-            "contract_min_price": 0.10,
-            "contract_max_price": 10.0,
-            "expiry_mode": "weekly",
-            "expiry_value": 1,
-            "chain_symbol": "SPY",
-        }
-        raw = dict(raw or {})
-        if "expiry_mode" not in raw:
-            legacy_pref = str(raw.get("expiry_preference") or "weekly").lower()
-            if legacy_pref == "nearest":
-                legacy_pref = "0dte"
-            raw["expiry_mode"] = legacy_pref if legacy_pref in {"0dte", "weekly", "monthly"} else "weekly"
-        if "expiry_value" not in raw:
-            raw["expiry_value"] = 0 if raw.get("expiry_mode") == "0dte" else 1
-        merged = {**defaults, **raw}
-        if merged["expiry_mode"] == "0dte":
-            merged["expiry_value"] = 0
-        else:
-            merged["expiry_value"] = max(int(merged.get("expiry_value", 1) or 1), 1)
-        return merged
+        active = style or _get_active_execution_style()
+        _set_active_execution_style(active)
+        return dict(settings_repo.update_execution_settings(active, **updates))
 
     def _get_options_settings() -> dict:
-        return _normalize_options_settings(_get_ui_settings("options_settings", {}))
+        return dict(settings_repo.get_options_settings())
 
     def _update_options_settings(**updates) -> dict:
-        current = _get_options_settings()
-        current.update(updates)
-        current = _normalize_options_settings(current)
-        return _set_ui_settings("options_settings", current)
+        return dict(settings_repo.update_options_settings(**updates))
 
     def _get_ml_weights() -> dict:
         return _get_ui_settings("ml_weights", {})
@@ -368,7 +276,7 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
             if text.endswith("%"):
                 return float(text[:-1]) / 100.0
             return float(text)
-        if field == "entry_cutoff_time":
+        if field in {"entry_cutoff_time", "time_of_day_restrictor", "premarket_start_time", "regular_market_open_time", "regular_market_close_time", "afterhours_end_time"}:
             text = raw.strip()
             parts = text.split(":")
             if len(parts) != 2:
@@ -731,7 +639,7 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         if not await _authorize_update(update):
             return
         if not context.args:
-            await update.message.reply_text("Usage: /set_risk_pct [day_trade|swing_trade] <value or percent>")
+            await update.message.reply_text("Usage: /set_risk_pct [day_trade|swing_trade|options] <value or percent>")
             return
         args = list(context.args)
         style = _get_active_execution_style()
@@ -745,7 +653,7 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         if not await _authorize_update(update):
             return
         if not context.args:
-            await update.message.reply_text("Usage: /set_atr_multiplier [day_trade|swing_trade] <value>")
+            await update.message.reply_text("Usage: /set_atr_multiplier [day_trade|swing_trade|options] <value>")
             return
         args = list(context.args)
         style = _get_active_execution_style()
@@ -759,7 +667,7 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
         if not await _authorize_update(update):
             return
         if not context.args:
-            await update.message.reply_text("Usage: /set_position_mode [day_trade|swing_trade] <auto|stock|options>")
+            await update.message.reply_text("Usage: /set_position_mode [day_trade|swing_trade|options] <auto|stock|options>")
             return
         args = list(context.args)
         style = _get_active_execution_style()
@@ -1251,7 +1159,6 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
                 await query.message.reply_text("Send new value for options.chain_symbol\nUse /cancel to stop.")
                 return
 
-        # ml callbacks
         # ml callbacks
         if data == "ml|show":
             _clear_pending(context)

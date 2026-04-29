@@ -230,10 +230,6 @@ def build_profile_preset_keyboard(profile: str, presets: list[str], current: str
     return InlineKeyboardMarkup(rows)
 
 
-def build_presets_keyboard(presets: list[str], current: str, options_settings: dict) -> InlineKeyboardMarkup:
-    return build_profile_preset_keyboard("overall", presets, current, options_settings)
-
-
 def build_mode_keyboard(current: str) -> InlineKeyboardMarkup:
     modes = [("alerts_only", "Alerts Only"), ("paper", "Paper"), ("live", "Live")]
     rows = [[InlineKeyboardButton(f"{'✅ ' if value == current else ''}{label}", callback_data=f"set|mode|{value}")] for value, label in modes]
@@ -245,10 +241,6 @@ def build_strategies_keyboard(states: dict[str, bool]) -> InlineKeyboardMarkup:
     rows = [[InlineKeyboardButton(f"{'🟢' if is_enabled else '⚪'} {strategy_name}", callback_data=f"toggle|strategy|{strategy_name}")] for strategy_name, is_enabled in states.items()]
     rows.append([InlineKeyboardButton("⬅ Back", callback_data="cp|back")])
     return InlineKeyboardMarkup(rows)
-
-
-def build_filter_profile_menu_keyboard(profile_preset_map: dict[str, str], active_profile: str) -> InlineKeyboardMarkup:
-    return build_preset_profiles_keyboard(profile_preset_map, active_profile, {})
 
 
 def build_filter_categories_keyboard(filters_snapshot: dict[str, dict], current_profile: str) -> InlineKeyboardMarkup:

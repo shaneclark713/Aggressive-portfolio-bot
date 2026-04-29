@@ -8,9 +8,12 @@ class SettingsRepository:
         "risk_pct": 0.01,
         "atr_multiplier": 1.0,
         "position_mode": "auto",
+        "take_profit": 0.20,
+        "stop_loss": 0.08,
         "take_profit_pct": 0.20,
         "stop_loss_pct": 0.08,
         "max_concurrent_positions": 3,
+        "entry_cutoff_time": "15:00",
         "time_of_day_restrictor": "15:00",
         "max_spread_pct": 0.03,
         "min_volume": 500_000,
@@ -20,23 +23,18 @@ class SettingsRepository:
         "trail_type": "percent",
         "trail_value": 0.02,
         "max_consecutive_losses": 3,
-        "market_hours_only": True,
-        "allow_premarket_entries": False,
-        "allow_afterhours_entries": False,
-        "market_timezone": "America/New_York",
-        "premarket_start_time": "04:00",
-        "regular_market_open_time": "09:30",
-        "regular_market_close_time": "16:00",
-        "afterhours_end_time": "20:00",
     }
 
     DEFAULT_SWING_TRADE_EXECUTION = {
         "risk_pct": 0.01,
         "atr_multiplier": 1.5,
         "position_mode": "auto",
+        "take_profit": 0.35,
+        "stop_loss": 0.12,
         "take_profit_pct": 0.35,
         "stop_loss_pct": 0.12,
         "max_concurrent_positions": 5,
+        "entry_cutoff_time": "15:30",
         "time_of_day_restrictor": "15:30",
         "max_spread_pct": 0.05,
         "min_volume": 250_000,
@@ -46,30 +44,15 @@ class SettingsRepository:
         "trail_type": "percent",
         "trail_value": 0.04,
         "max_consecutive_losses": 3,
-        "market_hours_only": True,
-        "allow_premarket_entries": False,
-        "allow_afterhours_entries": False,
-        "market_timezone": "America/New_York",
-        "premarket_start_time": "04:00",
-        "regular_market_open_time": "09:30",
-        "regular_market_close_time": "16:00",
-        "afterhours_end_time": "20:00",
     }
 
     DEFAULT_OPTIONS_EXECUTION = {
         **DEFAULT_DAY_TRADE_EXECUTION,
         "position_mode": "options",
         "max_concurrent_positions": 3,
+        "entry_cutoff_time": "15:00",
         "time_of_day_restrictor": "15:00",
         "max_consecutive_losses": 3,
-        "market_hours_only": True,
-        "allow_premarket_entries": False,
-        "allow_afterhours_entries": False,
-        "market_timezone": "America/New_York",
-        "premarket_start_time": "04:00",
-        "regular_market_open_time": "09:30",
-        "regular_market_close_time": "16:00",
-        "afterhours_end_time": "20:00",
     }
 
     DEFAULT_OPTIONS_SETTINGS = {
@@ -81,6 +64,7 @@ class SettingsRepository:
         "contract_max_price": 8.00,
         "min_daily_volume": 100,
         "expiry_mode": "weekly",
+        "expiry_value": 1,
         "expiry_count": 1,
         "chain_symbol": "SPY",
     }
@@ -192,6 +176,22 @@ class SettingsRepository:
             return deepcopy(self.DEFAULT_OPTIONS_EXECUTION)
         return deepcopy(self.DEFAULT_DAY_TRADE_EXECUTION)
 
+    def _normalize_execution_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        payload = dict(payload or {})
+        if "take_profit" not in payload and "take_profit_pct" in payload:
+            payload["take_profit"] = payload.get("take_profit_pct")
+        if "take_profit_pct" not in payload and "take_profit" in payload:
+            payload["take_profit_pct"] = payload.get("take_profit")
+        if "stop_loss" not in payload and "stop_loss_pct" in payload:
+            payload["stop_loss"] = payload.get("stop_loss_pct")
+        if "stop_loss_pct" not in payload and "stop_loss" in payload:
+            payload["stop_loss_pct"] = payload.get("stop_loss")
+        if "entry_cutoff_time" not in payload and "time_of_day_restrictor" in payload:
+            payload["entry_cutoff_time"] = payload.get("time_of_day_restrictor")
+        if "time_of_day_restrictor" not in payload and "entry_cutoff_time" in payload:
+            payload["time_of_day_restrictor"] = payload.get("entry_cutoff_time")
+        return payload
+
     def get_execution_settings(self, scope: str | None = None) -> Dict[str, Any]:
         if scope is None:
             return {
@@ -211,12 +211,13 @@ class SettingsRepository:
             merged.update(legacy)
         if isinstance(stored, dict):
             merged.update(stored)
-        return merged
+        return self._normalize_execution_payload(merged)
 
     def set_execution_settings(self, scope: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         normalized_scope = self.normalize_execution_scope(scope)
         merged = self._execution_defaults(normalized_scope)
         merged.update(payload or {})
+        merged = self._normalize_execution_payload(merged)
         self.set(f"execution_settings.{normalized_scope}", merged)
         return merged
 
@@ -225,29 +226,33 @@ class SettingsRepository:
         current.update(updates)
         return self.set_execution_settings(scope, current)
 
+    def _normalize_options_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        payload = dict(payload or {})
+        expiry_mode = str(payload.pop("expiry_preference", payload.get("expiry_mode", "weekly")) or "weekly").strip().lower()
+        if expiry_mode == "nearest":
+            expiry_mode = "0dte"
+        if expiry_mode == "any":
+            expiry_mode = "weekly"
+        if expiry_mode not in {"0dte", "weekly", "monthly"}:
+            expiry_mode = "weekly"
+        expiry_value = payload.get("expiry_value", payload.get("expiry_count", 1))
+        expiry_value = 0 if expiry_mode == "0dte" else max(int(expiry_value or 1), 1)
+        payload["expiry_mode"] = expiry_mode
+        payload["expiry_value"] = expiry_value
+        payload["expiry_count"] = expiry_value
+        return payload
+
     def get_options_settings(self) -> Dict[str, Any]:
         legacy = self.get("options_settings", {}) or {}
         merged = deepcopy(self.DEFAULT_OPTIONS_SETTINGS)
         if isinstance(legacy, dict):
             merged.update(legacy)
-
-        expiry_pref = str(merged.pop("expiry_preference", merged.get("expiry_mode", "weekly")) or "weekly").strip().lower()
-        expiry_count = merged.get("expiry_count", 1)
-        if expiry_pref == "nearest":
-            expiry_pref = "0dte"
-            expiry_count = 0
-        if expiry_pref == "any":
-            expiry_pref = "weekly"
-        merged["expiry_mode"] = expiry_pref
-        merged["expiry_count"] = int(expiry_count or 0)
-        return merged
+        return self._normalize_options_payload(merged)
 
     def set_options_settings(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         merged = deepcopy(self.DEFAULT_OPTIONS_SETTINGS)
         merged.update(payload or {})
-        if str(merged.get("expiry_mode", "")).lower() == "nearest":
-            merged["expiry_mode"] = "0dte"
-            merged["expiry_count"] = 0
+        merged = self._normalize_options_payload(merged)
         self.set("options_settings", merged)
         return merged
 

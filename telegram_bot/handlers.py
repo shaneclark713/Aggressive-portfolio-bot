@@ -165,35 +165,32 @@ def _render_scan_overview(name: str, payload: dict[str, Any]) -> str:
     return str(payload)
 
 
+def _snapshot_lines(payload: dict[str, Any] | None, profile: str | None = None) -> list[str]:
+    payload = payload or {}
+    lines = []
+    if profile or payload.get("profile"):
+        lines.append(f"Profile: {payload.get('profile', profile)}")
+    lines.extend([
+        f"Raw symbols: {payload.get('raw_count', 'n/a')}",
+        f"Rows: {payload.get('row_count', len(payload.get('rows', [])))}",
+        f"Skipped: {payload.get('skipped', 0)}",
+    ])
+    if payload.get("source"):
+        lines.append(f"Source: {payload.get('source')}")
+    if payload.get("created_at"):
+        lines.append(f"Created: {payload.get('created_at')}")
+    skip_reasons = payload.get("skip_reasons") or {}
+    if isinstance(skip_reasons, dict) and skip_reasons:
+        lines.append("Skip reasons:")
+        lines.extend(f"{key}: {value}" for key, value in list(skip_reasons.items())[:8])
+    return lines
+
+
 async def _safe_edit_message_text(query, text: str, **kwargs):
     try:
         return await query.edit_message_text(text, **kwargs)
     except BadRequest as exc:
         if "Message is not modified" in str(exc):
-            return None
-        raise
-
-
-async def _safe_answer_query(query, text: str | None = None, show_alert: bool = False):
-    """Answer Telegram callback queries without crashing on stale callback IDs.
-
-    Long-running scan callbacks can delay Telegram's callback acknowledgement window.
-    When that happens Telegram raises: "Query is too old and response timeout
-    expired or query id is invalid". That should not break the bot; the action can
-    still complete and edit/send the message normally.
-    """
-    try:
-        if text is None:
-            return await query.answer()
-        return await query.answer(text=text, show_alert=show_alert)
-    except BadRequest as exc:
-        message = str(exc)
-        stale_markers = (
-            "Query is too old",
-            "response timeout expired",
-            "query id is invalid",
-        )
-        if any(marker in message for marker in stale_markers):
             return None
         raise
 
@@ -932,10 +929,10 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
 
     async def _guarded_callback(update, context):
         query = update.callback_query
+        await query.answer()
         if update.effective_chat.id != admin_chat_id:
-            await _safe_answer_query(query, "Unauthorized", show_alert=True)
+            await query.answer("Unauthorized", show_alert=True)
             return
-        await _safe_answer_query(query)
 
         data = query.data or ""
         if data.startswith(("a|", "p|", "r|")):
@@ -998,6 +995,20 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
                 return
             if action == "status":
                 stats = scanner.get_last_scan_stats() if scanner else {}
+                if not stats and discovery is not None:
+                    profile = _get_active_filter_profile_safe()
+                    status = await discovery.snapshot_status(profile)
+                    stats = {
+                        "profile": profile,
+                        "universe_loaded": status.get("row_count", 0),
+                        "discovery_candidates": status.get("row_count", 0),
+                        "lightweight_watchlist_count": 0,
+                        "evaluated": 0,
+                        "qualified": 0,
+                        "errors": 0,
+                        "rejection_counts": status.get("skip_reasons", {}),
+                        "error_examples": ["No completed scan yet. Run Market/Premarket/Midday after Refresh Snapshot."],
+                    }
                 await _safe_edit_message_text(query, format_scan_status(stats), parse_mode="HTML", reply_markup=build_scan_menu_keyboard())
                 return
             if action == "passers":
@@ -1010,8 +1021,9 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
                     return
                 profile = _get_active_filter_profile_safe()
                 snapshot = await discovery.get_snapshot(profile, force_refresh=True)
-                await _safe_edit_message_text(query, 
-                    format_simple_lines("Snapshot Refreshed", [f"Profile: {profile}", f"Rows: {snapshot.get('row_count', len(snapshot.get('rows', [])))}"]),
+                await _safe_edit_message_text(
+                    query,
+                    format_simple_lines("Snapshot Refreshed", _snapshot_lines(snapshot, profile)),
                     parse_mode="HTML",
                     reply_markup=build_scan_menu_keyboard(),
                 )
@@ -1022,8 +1034,7 @@ def build_handlers(app_services, config_service, admin_chat_id: int):
                     return
                 profile = _get_active_filter_profile_safe()
                 status = await discovery.snapshot_status(profile)
-                lines = [f"Profile: {status.get('profile')}", f"Rows: {status.get('row_count', 0)}", f"Source: {status.get('source', 'unknown')}", f"Created: {status.get('created_at', 'unknown')}"]
-                await _safe_edit_message_text(query, format_simple_lines("Snapshot Status", lines), parse_mode="HTML", reply_markup=build_scan_menu_keyboard())
+                await _safe_edit_message_text(query, format_simple_lines("Snapshot Status", _snapshot_lines(status, profile)), parse_mode="HTML", reply_markup=build_scan_menu_keyboard())
                 return
             if scanner is None:
                 await _safe_edit_message_text(query, "Scanner service not configured.", reply_markup=build_scan_menu_keyboard())

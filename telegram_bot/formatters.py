@@ -87,17 +87,19 @@ def format_scan_status(stats: Mapping[str, Any]) -> str:
         "🔎 <b>Scan Status</b>",
         "",
         f"<b>Profile:</b> {escape(str(stats.get('profile', stats.get('scan_type', 'n/a'))))}",
+        f"<b>Snapshot Rows:</b> {_line_value('snapshot_row_count', 'n/a')}",
+        f"<b>Snapshot Skipped:</b> {_line_value('snapshot_skipped', 0)}",
         f"<b>Universe Loaded:</b> {_line_value('universe_loaded')}",
         f"<b>Discovery Candidates:</b> {_line_value('discovery_candidates', _line_value('symbols_considered', 0))}",
         f"<b>Lightweight Passers:</b> {_line_value('lightweight_watchlist_count', _line_value('passed_universe_filters', 0))}",
-        f"<b>Heavy Rejections:</b> {_line_value('heavy_rejections', 0)}",
-        f"<b>Empty Market Data:</b> {_line_value('empty_data', 0)}",
-        f"<b>Strategy Evaluated:</b> {_line_value('evaluated', 0)}",
-        f"<b>No Strategy Signal:</b> {_line_value('no_signal', 0)}",
+        f"<b>Evaluated:</b> {_line_value('evaluated', 0)}",
         f"<b>Qualified:</b> {_line_value('qualified', 0)}",
         f"<b>Rate Limited:</b> {_line_value('rate_limited', 0)}",
         f"<b>Errors:</b> {_line_value('errors', 0)}",
     ]
+
+    if stats.get("no_candidate_reason"):
+        lines.append(f"<b>No Candidate Reason:</b> {escape(str(stats.get('no_candidate_reason')))}")
 
     rejection_counts = stats.get("rejection_counts") or stats.get("rejection_breakdown") or {}
     if isinstance(rejection_counts, Mapping) and rejection_counts:
@@ -116,6 +118,7 @@ def format_scan_status(stats: Mapping[str, Any]) -> str:
             lines.append(f"• {escape(str(item))}")
 
     return "\n".join(lines)
+
 
 def format_chain_summary(summary: Mapping[str, Any]) -> str:
     return (

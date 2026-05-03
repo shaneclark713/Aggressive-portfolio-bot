@@ -31,47 +31,34 @@ class ScannerService:
         return exc.__class__.__name__
 
     async def _scan_symbols(self, symbols: list[str], multiplier: int, timespan: str, scan_label: str, scan_type: str) -> List[Dict[str, Any]]:
-        candidates: List[Dict[str, Any]] = []
+        candidates = []
         errors = evaluated = qualified = rate_limited = 0
-        heavy_rejection_count = empty_data_count = no_signal_count = 0
-        top_symbols: List[str] = []
-        error_examples: List[str] = []
-        heavy_rejections: List[str] = []
-        rejection_counts: Dict[str, int] = {}
+        top_symbols = []
+        error_examples = []
+        heavy_rejections = []
         scan_time = datetime.now(timezone.utc).isoformat()
         today = date.today().isoformat()
         start = (date.today() - timedelta(days=3)).isoformat()
-
-        def count_rejection(reason: str) -> None:
-            rejection_counts[reason] = rejection_counts.get(reason, 0) + 1
 
         for index, symbol in enumerate(symbols):
             try:
                 heavy = await self.universe_filter.enrich_symbol_for_entry(symbol, scan_type=scan_type)
                 if not heavy.get("passes_heavy_filters", False):
-                    reason = str(heavy.get("rejection_reason") or "heavy_filter_failed")
-                    heavy_rejection_count += 1
-                    count_rejection(reason)
-                    heavy_rejections.append(f"{symbol}: {reason}")
+                    heavy_rejections.append(f"{symbol}: {heavy.get('rejection_reason', 'heavy_filter_failed')}")
                     continue
 
                 df = await self.market_client.get_historical_data(symbol=symbol, multiplier=multiplier, timespan=timespan)
                 if df.empty:
-                    empty_data_count += 1
-                    count_rejection("empty_market_data")
-                    error_examples.append(f"{symbol}: empty_market_data")
+                    error_examples.append(f"{symbol}: empty_data")
                     continue
 
                 evaluated += 1
                 payload = self.router.evaluate_ticker(symbol, df)
                 if not payload:
-                    no_signal_count += 1
-                    count_rejection("no_strategy_signal")
-                    error_examples.append(f"{symbol}: no_strategy_signal")
                     continue
 
                 symbol_news_count = 0
-                catalyst_headlines: List[str] = []
+                catalyst_headlines = []
                 if self.news_client is not None:
                     try:
                         symbol_news = await self.news_client.fetch_ticker_news(symbol, start_date=start, end_date=today)
@@ -100,7 +87,6 @@ class ScannerService:
                 compact = self._compact_error(exc)
                 if compact == "rate_limited":
                     rate_limited += 1
-                count_rejection(compact)
                 error_examples.append(f"{symbol}: {compact}")
                 logger.warning("Scanner failed for %s during %s: %s", symbol, scan_label, compact)
 
@@ -110,32 +96,34 @@ class ScannerService:
 
         watchlist_stats = self.universe_filter.get_last_watchlist_stats()
         combined_examples = (error_examples + heavy_rejections)[:10]
+        if not combined_examples and watchlist_stats.get("rejected_examples"):
+            combined_examples = [f"{key}: {value}" for key, value in list(watchlist_stats.get("rejected_examples", {}).items())[:10]]
         self._last_scan_stats = {
             "scan_label": scan_label,
             "scan_type": scan_type,
             "profile": watchlist_stats.get("profile", scan_type),
             "scan_timestamp_utc": scan_time,
+            "snapshot_raw_count": watchlist_stats.get("snapshot_raw_count", "n/a"),
+            "snapshot_row_count": watchlist_stats.get("snapshot_row_count", "n/a"),
+            "snapshot_skipped": watchlist_stats.get("snapshot_skipped", 0),
             "universe_loaded": watchlist_stats.get("symbols_considered", len(symbols)),
             "discovery_candidates": watchlist_stats.get("symbols_considered", len(symbols)),
             "passed_universe_filters": len(symbols),
-            "lightweight_watchlist_count": len(symbols),
-            "symbols_fetched": watchlist_stats.get("symbols_fetched", 0),
             "evaluated": evaluated,
             "symbols_evaluated": evaluated,
             "qualified": qualified,
             "qualified_setups": qualified,
             "errors": errors,
             "rate_limited": rate_limited + watchlist_stats.get("rate_limited", 0),
-            "heavy_rejections": heavy_rejection_count,
-            "empty_data": empty_data_count,
-            "no_signal": no_signal_count,
             "top_symbols": top_symbols[:10],
             "error_examples": combined_examples,
             "rejected_examples": watchlist_stats.get("rejected_examples", {}),
-            "rejection_counts": {**watchlist_stats.get("rejection_counts", {}), **rejection_counts},
-            "metric_snapshot": watchlist_stats.get("metric_snapshot", {}),
+            "rejection_counts": watchlist_stats.get("rejection_counts", {}),
+            "lightweight_watchlist_count": len(symbols),
             "source": watchlist_stats.get("source", "dynamic_market_snapshot"),
         }
+        if not symbols:
+            self._last_scan_stats["no_candidate_reason"] = "no_symbols_after_discovery_or_lightweight_filters"
         return candidates
 
     async def _run_lane_scan(self, scan_type: str, scan_label: str, multiplier: int, timespan: str) -> Dict[str, Any]:
@@ -188,128 +176,6 @@ class ScannerService:
                 rows.append({"symbol": symbol, "headline_count": 0, "headlines": [f"error: {self._compact_error(exc)}"]})
             await asyncio.sleep(0.25)
         return {"symbols_checked": len(symbols), "catalysts": rows}
-
-
-    async def scan_ticker_overview(self, symbol: str, scan_type: str = "market") -> Dict[str, Any]:
-        """Run a direct one-symbol scan without relying on the discovery passers list."""
-        symbol = str(symbol or "").strip().upper()
-        scan_type = str(scan_type or "market").strip().lower()
-        aliases = {
-            "day": "market",
-            "day_trade": "market",
-            "overall": "market",
-            "scan": "market",
-            "swing": "overnight",
-            "swing_trade": "overnight",
-            "news": "catalyst",
-        }
-        scan_type = aliases.get(scan_type, scan_type)
-        if scan_type not in {"market", "premarket", "midday", "overnight", "catalyst"}:
-            scan_type = "market"
-
-        result: Dict[str, Any] = {
-            "symbol": symbol,
-            "scan_type": scan_type,
-            "scan_timestamp_utc": datetime.now(timezone.utc).isoformat(),
-            "passed_filters": False,
-            "strategy_signal": False,
-            "qualified": False,
-            "rejection_reason": None,
-            "news_count": 0,
-            "headlines": [],
-        }
-        if not symbol:
-            result["error"] = "missing_symbol"
-            return result
-
-        today = date.today().isoformat()
-        start = (date.today() - timedelta(days=3)).isoformat()
-
-        if self.news_client is not None:
-            try:
-                headlines = await self.news_client.fetch_ticker_news(symbol, start_date=start, end_date=today)
-                result["news_count"] = len(headlines)
-                result["headlines"] = self.news_client.summarize_headlines(headlines, limit=5)
-            except Exception as exc:
-                result["headlines"] = [f"news_error: {self._compact_error(exc)}"]
-
-        if scan_type == "catalyst":
-            result["passed_filters"] = True
-            result["qualified"] = bool(result.get("news_count", 0))
-            if not result["qualified"]:
-                result["rejection_reason"] = "no_recent_headlines"
-            return result
-
-        multiplier = 1 if scan_type == "overnight" else 5
-        timespan = "day" if scan_type == "overnight" else "minute"
-
-        try:
-            heavy = await self.universe_filter.enrich_symbol_for_entry(symbol, scan_type=scan_type)
-            result.update({
-                "passes_heavy_filters": bool(heavy.get("passes_heavy_filters", True)),
-                "heavy_rejection_reason": heavy.get("rejection_reason"),
-                "premarket_volume": heavy.get("premarket_volume", 0),
-                "premarket_gap_min_percent": heavy.get("premarket_gap_min_percent", 0),
-                "max_float": heavy.get("max_float"),
-            })
-        except Exception as exc:
-            result["passes_heavy_filters"] = False
-            result["heavy_rejection_reason"] = f"heavy_filter_error: {self._compact_error(exc)}"
-
-        try:
-            df = await self.market_client.get_historical_data(symbol=symbol, multiplier=multiplier, timespan=timespan)
-        except Exception as exc:
-            result["error"] = f"market_data_error: {self._compact_error(exc)}"
-            return result
-
-        if df.empty:
-            result["error"] = "empty_market_data"
-            return result
-
-        try:
-            latest = df.dropna(subset=["close"]).iloc[-1]
-            result["price"] = float(latest.get("close", 0) or 0)
-            result["volume"] = float(latest.get("volume", 0) or 0)
-            result["bars_loaded"] = int(len(df))
-        except Exception:
-            pass
-
-        passes_lightweight = False
-        metrics = {}
-        try:
-            filters = self.universe_filter._filters_for_scan(scan_type)
-            metrics = self.universe_filter._compute_metrics(df, symbol)
-            if metrics:
-                passes_lightweight = self.universe_filter._passes_lightweight_filters(metrics, filters["descriptive"], filters["technical"])
-                result.update({
-                    "price": metrics.get("price", result.get("price")),
-                    "volume": metrics.get("avg_daily_volume", result.get("volume")),
-                    "relative_volume": metrics.get("relative_volume"),
-                    "atr_pct": metrics.get("atr_pct"),
-                    "gap_pct": metrics.get("gap_pct"),
-                    "avg_dollar_volume": metrics.get("avg_dollar_volume"),
-                })
-        except Exception as exc:
-            result["lightweight_filter_error"] = self._compact_error(exc)
-
-        passes_heavy = bool(result.get("passes_heavy_filters", True))
-        result["passed_filters"] = bool(passes_heavy and passes_lightweight)
-        if not result["passed_filters"]:
-            result["rejection_reason"] = result.get("heavy_rejection_reason") or "failed_lightweight_thresholds"
-
-        try:
-            payload = self.router.evaluate_ticker(symbol, df)
-        except Exception as exc:
-            result["strategy_error"] = self._compact_error(exc)
-            payload = None
-
-        if payload:
-            result["strategy_signal"] = True
-            result.update(payload)
-        result["qualified"] = bool(result["passed_filters"] and result["strategy_signal"])
-        if result["passed_filters"] and not result["strategy_signal"]:
-            result["rejection_reason"] = "no_strategy_signal"
-        return result
 
     async def scan_full_overview(self) -> Dict[str, Any]:
         return {

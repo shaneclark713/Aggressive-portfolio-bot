@@ -77,6 +77,12 @@ class DiscoveryService:
             return True
         return datetime.now(timezone.utc) - created_dt > timedelta(minutes=self._max_age_minutes(profile))
 
+    def _as_float(self, value: Any, default: float = 0.0) -> float:
+        try:
+            return float(value)
+        except Exception:
+            return default
+
     def _parse_snapshot_row(self, item: Dict[str, Any]) -> Dict[str, Any] | None:
         symbol = item.get("ticker") or item.get("symbol")
         if not symbol:
@@ -84,21 +90,32 @@ class DiscoveryService:
 
         day = item.get("day") or {}
         prev_day = item.get("prevDay") or {}
+        minute = item.get("min") or {}
         last_trade = item.get("lastTrade") or {}
         last_quote = item.get("lastQuote") or {}
 
-        price = last_trade.get("p") or day.get("c") or prev_day.get("c")
+        price = last_trade.get("p") or minute.get("c") or day.get("c") or prev_day.get("c")
         if price in (None, ""):
             return None
 
-        try:
-            price = float(price)
-        except Exception:
+        price = self._as_float(price)
+        if price <= 0:
             return None
 
-        volume = float(day.get("v") or 0)
-        prev_close = float(prev_day.get("c") or 0)
-        day_open = float(day.get("o") or 0)
+        current_day_volume = self._as_float(day.get("v"), 0.0)
+        previous_day_volume = self._as_float(prev_day.get("v"), 0.0)
+        minute_volume = self._as_float(minute.get("v"), 0.0)
+
+        # Polygon's full-market snapshot often reports day.v = 0 before regular
+        # open even while lastTrade/min/prevDay are valid. Do not throw the
+        # symbol away at discovery just because today's regular-session volume
+        # has not populated yet. Use prior daily volume as the liquidity baseline
+        # and leave stricter premarket checks to UniverseFilter.enrich_symbol_for_entry.
+        liquidity_volume = current_day_volume or previous_day_volume or minute_volume
+        volume_source = "day" if current_day_volume else "prev_day" if previous_day_volume else "minute" if minute_volume else "none"
+
+        prev_close = self._as_float(prev_day.get("c"), 0.0)
+        day_open = self._as_float(day.get("o"), 0.0)
         todays_change_pct = item.get("todaysChangePerc")
         try:
             change_pct = float(todays_change_pct) if todays_change_pct is not None else 0.0
@@ -111,15 +128,22 @@ class DiscoveryService:
         gap_pct = 0.0
         if prev_close and day_open:
             gap_pct = abs((day_open - prev_close) / prev_close) * 100.0
+        elif prev_close and price and current_day_volume <= 0:
+            # Premarket/afterhours fallback: estimate gap from last trade vs previous close.
+            gap_pct = abs((price - prev_close) / prev_close) * 100.0
 
-        bid = float(last_quote.get("P") or 0)
-        ask = float(last_quote.get("p") or 0)
+        bid = self._as_float(last_quote.get("P"), 0.0)
+        ask = self._as_float(last_quote.get("p"), 0.0)
 
         return {
             "symbol": symbol,
             "price": price,
-            "day_volume": volume,
-            "day_dollar_volume": price * volume,
+            "day_volume": liquidity_volume,
+            "current_day_volume": current_day_volume,
+            "prev_day_volume": previous_day_volume,
+            "minute_volume": minute_volume,
+            "volume_source": volume_source,
+            "day_dollar_volume": price * liquidity_volume,
             "change_pct": change_pct,
             "gap_pct": gap_pct,
             "prev_close": prev_close,
@@ -149,7 +173,7 @@ class DiscoveryService:
                 skip("price_below_floor")
                 continue
             if parsed["day_volume"] <= 0:
-                skip("zero_day_volume")
+                skip("no_liquidity_volume")
                 continue
             rows.append(parsed)
 
@@ -191,8 +215,10 @@ class DiscoveryService:
             self._last_status[profile] = {
                 "profile": profile,
                 "created_at": payload.get("created_at"),
+                "raw_count": payload.get("raw_count", "n/a"),
                 "row_count": payload.get("row_count", len(payload.get("rows", []))),
                 "skipped": payload.get("skipped", 0),
+                "skip_reasons": payload.get("skip_reasons", {}),
                 "source": "cache",
                 "refresh_reason": "fresh_cache",
             }

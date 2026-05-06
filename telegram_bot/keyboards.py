@@ -204,6 +204,15 @@ def build_preset_profiles_keyboard(profile_preset_map: dict[str, str], active_pr
     return InlineKeyboardMarkup(rows)
 
 
+def build_filter_profile_menu_keyboard(profile_preset_map: dict[str, str] | None = None, active_profile: str = "overall", options_settings: dict | None = None) -> InlineKeyboardMarkup:
+    """Backward-compatible alias for older handlers.
+
+    Presets and filters were combined under build_preset_profiles_keyboard. Some deployed handler
+    versions still import the old name, so keep this shim to prevent boot-time ImportError.
+    """
+    return build_preset_profiles_keyboard(profile_preset_map or {}, active_profile, options_settings)
+
+
 def build_profile_preset_keyboard(profile: str, presets: list[str], current: str, options_settings: dict) -> InlineKeyboardMarkup:
     if profile == "options":
         enabled_text = "🟢 Options ON" if options_settings.get("enabled") else "⚪ Options OFF"

@@ -213,6 +213,29 @@ def build_filter_profile_menu_keyboard(profile_preset_map: dict[str, str] | None
     return build_preset_profiles_keyboard(profile_preset_map or {}, active_profile, options_settings)
 
 
+def build_presets_keyboard(*args, **kwargs) -> InlineKeyboardMarkup:
+    """Backward-compatible presets keyboard.
+
+    Older handlers import build_presets_keyboard. The active UI now uses profile-based
+    Presets / Filters, so this shim supports both old list-style calls and the new
+    profile map shape.
+    """
+    if args and isinstance(args[0], dict):
+        profile_preset_map = args[0]
+        active_profile = args[1] if len(args) > 1 else kwargs.get("active_profile", "overall")
+        options_settings = args[2] if len(args) > 2 else kwargs.get("options_settings")
+        return build_preset_profiles_keyboard(profile_preset_map, active_profile, options_settings)
+
+    presets = args[0] if args else kwargs.get("presets", [])
+    current = args[1] if len(args) > 1 else kwargs.get("current", "")
+    rows = [
+        [InlineKeyboardButton(f"{'✅ ' if name == current else ''}{_pretty_name(str(name))}", callback_data=f"set|preset|{name}")]
+        for name in list(presets or [])
+    ]
+    rows.append([InlineKeyboardButton("⬅ Profiles", callback_data="cp|presets")])
+    return InlineKeyboardMarkup(rows)
+
+
 def build_profile_preset_keyboard(profile: str, presets: list[str], current: str, options_settings: dict) -> InlineKeyboardMarkup:
     if profile == "options":
         enabled_text = "🟢 Options ON" if options_settings.get("enabled") else "⚪ Options OFF"

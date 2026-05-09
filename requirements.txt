@@ -1,13 +1,8 @@
 aiohttp>=3.9
 aiosqlite>=0.20
 APScheduler>=3.10
-backtrader>=1.9
 gspread>=6.1
-ib_insync>=0.9.86
-matplotlib>=3.8
-mplfinance>=0.12
 pandas>=2.2
 python-telegram-bot>=22.1
 python-dateutil>=2.9
 pytz>=2024.1
-websockets>=12.0

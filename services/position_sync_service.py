@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 
 
@@ -22,6 +23,9 @@ class PositionSyncService:
             return float(value)
         except Exception:
             return default
+
+    def _demo_fallback_enabled(self) -> bool:
+        return str(os.getenv("ENABLE_DEMO_POSITION_FALLBACK", "false")).strip().lower() in {"1", "true", "yes", "on"}
 
     def _alpaca_current_price(self, row: dict[str, Any], qty: float, entry_price: float) -> float:
         direct = self._safe_float(row.get("current_price") or row.get("current_price_last"), 0.0)
@@ -187,7 +191,7 @@ class PositionSyncService:
             if removed:
                 results["pruned_positions"] = {"symbol": "PRUNED", "removed": removed, "count": len(removed)}
 
-        if live_position_count == 0 and include_demo_fallback:
+        if live_position_count == 0 and include_demo_fallback and self._demo_fallback_enabled():
             results.update(await self.sync_demo_positions())
 
         return results

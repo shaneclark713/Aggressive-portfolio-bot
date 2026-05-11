@@ -12,6 +12,25 @@ audit/phase-1-runtime-blockers
 
 Do not redeploy after every individual fix. Merge the completed audit branch, then run one controlled redeploy and fix any startup/runtime errors from that single pass.
 
+## Render build/start settings
+
+This repo does not currently use `render.yaml`, so Render settings are expected to live in the Render dashboard.
+
+Recommended settings:
+
+```text
+Environment: Docker
+Dockerfile: Dockerfile
+Start command: inherited from Dockerfile
+Docker CMD: python app.py
+```
+
+The Dockerfile already installs `requirements.txt` and starts:
+
+```text
+python app.py
+```
+
 ## Required Render environment values
 
 ```text
@@ -54,6 +73,9 @@ Run these from the admin chat only:
 /trail_status
 /scan_ticker SPY market
 /research_ticker SPY market
+/spy_0dte
+/spy_midday
+/spy_levels
 ```
 
 Expected safety behavior:
@@ -87,6 +109,20 @@ The 6:15 and 7:00 Pacific scheduled reports should include:
 
 - XSP/SPX cross-confirmation is optional. If the market data provider does not return index symbols through the configured endpoint, the report should continue using SPY-only structure and show the cross-check as unavailable.
 - Option-chain concentration zones depend on Tradier chain availability. If Tradier is not configured or returns no chain, the report should continue without crashing.
+
+## Local smoke check before merge/redeploy
+
+Run this before merging or redeploying if you have the repo locally:
+
+```text
+python scripts/audit_smoke_check.py
+```
+
+Expected output:
+
+```text
+AUDIT SMOKE CHECK PASSED
+```
 
 ## Do not enable live mode until verified
 

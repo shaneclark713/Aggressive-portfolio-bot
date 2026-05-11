@@ -192,7 +192,57 @@ class Spy0DteService:
             state = "confirmed"
         else:
             state = "unconfirmed"
-        return {"state": state, "spy_change_pct": round(spy_change, 2), "notes": notes[:4]}
+        return {"state": state, "confirmations": confirmations, "spy_change_pct": round(spy_change, 2), "notes": notes[:4]}
+
+    def _confidence(self, payload: dict[str, Any]) -> dict[str, Any]:
+        structure = payload.get("structure", {})
+        cross = payload.get("cross_confirmation", {})
+        score = abs(int(structure.get("score", 0)))
+        notes: list[str] = []
+        if structure.get("bias") != "balanced / tactical":
+            score += 10
+            notes.append("Directional structure is not neutral.")
+        if cross.get("state") == "confirmed":
+            score += 15
+            notes.append("SPY structure has index cross-confirmation.")
+        elif cross.get("state") == "unconfirmed":
+            score -= 10
+            notes.append("Index cross-confirmation is missing or divergent.")
+        vol_state = str(payload.get("volatility_state", ""))
+        if "normal" in vol_state or "expanding" in vol_state:
+            score += 10
+            notes.append("Volatility state supports tradable movement.")
+        elif "compressed" in vol_state:
+            score -= 10
+            notes.append("Compressed volatility raises chop/pin risk.")
+        rsi = self._safe_float(payload.get("rsi_5m"), 50.0)
+        if 40 <= rsi <= 68:
+            score += 10
+            notes.append("RSI is in a usable continuation/reversion band.")
+        elif rsi > 75 or rsi < 25:
+            score -= 10
+            notes.append("RSI is extreme; wait for stabilization or pullback confirmation.")
+        if int(payload.get("high_impact_count", 0) or 0) > 0:
+            score -= 5
+            notes.append("High-impact economic events increase headline risk.")
+        score = max(0, min(100, score))
+        if score >= 70:
+            grade = "A"
+        elif score >= 55:
+            grade = "B"
+        elif score >= 40:
+            grade = "C"
+        else:
+            grade = "NO-TRADE / WAIT"
+        trend_probability = max(20, min(80, 50 + int(structure.get("score", 0)) // 2))
+        mean_reversion_probability = 100 - trend_probability
+        return {
+            "score": score,
+            "grade": grade,
+            "trend_probability": trend_probability,
+            "mean_reversion_probability": mean_reversion_probability,
+            "notes": notes[:5],
+        }
 
     async def _safe_headlines(self) -> list[dict[str, Any]]:
         try:
@@ -263,7 +313,7 @@ class Spy0DteService:
         structure = self._structure(latest, vwap, rsi_5m, regular, opening_range)
         xsp_latest = await self._safe_latest_price("I:XSP")
         spx_latest = await self._safe_latest_price("I:SPX")
-        return {
+        payload = {
             "timestamp": datetime.now(self.market_tz).isoformat(timespec="seconds"),
             "latest": latest,
             "prev_close": prev_close,
@@ -288,19 +338,24 @@ class Spy0DteService:
             "chain_contracts": len(chain_rows),
             "zones": self._chain_zones(latest, chain_rows),
             "structure": structure,
-            "cross_confirmation": self._cross_confirmation(latest, prev_close, structure, xsp_latest, spx_latest),
         }
+        payload["cross_confirmation"] = self._cross_confirmation(latest, prev_close, structure, xsp_latest, spx_latest)
+        payload["confidence"] = self._confidence(payload)
+        return payload
 
     def format_report(self, payload: dict[str, Any], title: str) -> str:
         structure = payload.get("structure", {})
         zones = payload.get("zones", {})
         cross = payload.get("cross_confirmation", {})
+        confidence = payload.get("confidence", {})
         lines = [
             f"<b>{escape(title)}</b>",
             f"<i>{escape(str(payload.get('timestamp', '')))}</i>",
             "",
             "<b>EXECUTIVE READ</b>",
             f"• Structure: {escape(str(structure.get('bias', 'balanced / tactical')))} | Score: {escape(str(structure.get('score', 0)))}",
+            f"• Confidence: {escape(str(confidence.get('grade', 'n/a')))} | {escape(str(confidence.get('score', 0)))} / 100",
+            f"• Probability: Trend {escape(str(confidence.get('trend_probability', 50)))}% / Mean-Reversion {escape(str(confidence.get('mean_reversion_probability', 50)))}%",
             f"• Day Type: {escape(str(structure.get('day_type', 'rotation / mean-reversion structure')))}",
             f"• Volatility State: {escape(str(payload.get('volatility_state', 'unknown')))}",
             f"• Cross Confirmation: {escape(str(cross.get('state', 'n/a')))} | SPY Change: {escape(str(cross.get('spy_change_pct', 0.0)))}%",
@@ -328,6 +383,8 @@ class Spy0DteService:
         lines.extend(f"• {escape(str(item))}" for item in payload.get("sweep_notes", [])[:4])
         lines.extend(["", "<b>CROSS-CHECK NOTES</b>"])
         lines.extend(f"• {escape(str(item))}" for item in cross.get("notes", [])[:4])
+        lines.extend(["", "<b>CONFIDENCE NOTES</b>"])
+        lines.extend(f"• {escape(str(item))}" for item in confidence.get("notes", [])[:5])
         lines.extend([
             "",
             "<b>CATALYSTS / SENTIMENT</b>",

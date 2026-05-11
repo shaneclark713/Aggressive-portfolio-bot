@@ -6,8 +6,4 @@ build-backend = "setuptools.build_meta"
 name = "aggressive-portfolio-bot"
 version = "1.0.0"
 description = "Async multi-broker trading bot with Telegram control plane"
-requires-python = ">=3.11"
-
-[tool.pytest.ini_options]
-pythonpath = ["."]
-testpaths = ["tests"]
+requires-python = ">=3.10"

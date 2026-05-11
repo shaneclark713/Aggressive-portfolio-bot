@@ -162,6 +162,38 @@ class Spy0DteService:
             return "compressed / pinned"
         return "normal intraday expansion"
 
+    def _cross_confirmation(self, spy_latest: float, spy_prev_close: float, spy_structure: dict[str, Any], xsp_latest: float, spx_latest: float) -> dict[str, Any]:
+        spy_change = ((spy_latest - spy_prev_close) / spy_prev_close * 100.0) if spy_latest and spy_prev_close else 0.0
+        notes: list[str] = []
+        confirmations = 0
+        if xsp_latest:
+            xsp_proxy = xsp_latest * 10
+            spread_pct = ((xsp_proxy - spy_latest) / spy_latest * 100.0) if spy_latest else 0.0
+            if abs(spread_pct) <= 0.35:
+                confirmations += 1
+                notes.append("XSP proxy is aligned with SPY price structure.")
+            else:
+                notes.append(f"XSP proxy divergence detected ({spread_pct:.2f}%).")
+        else:
+            notes.append("XSP live price unavailable; using SPY primary structure.")
+        if spx_latest:
+            spx_proxy = spx_latest / 10
+            spread_pct = ((spx_proxy - spy_latest) / spy_latest * 100.0) if spy_latest else 0.0
+            if abs(spread_pct) <= 0.35:
+                confirmations += 1
+                notes.append("SPX proxy is aligned with SPY price structure.")
+            else:
+                notes.append(f"SPX proxy divergence detected ({spread_pct:.2f}%).")
+        else:
+            notes.append("SPX live price unavailable; no index cross-check included.")
+        if spy_structure.get("bias") == "balanced / tactical":
+            state = "neutral confirmation"
+        elif confirmations >= 1:
+            state = "confirmed"
+        else:
+            state = "unconfirmed"
+        return {"state": state, "spy_change_pct": round(spy_change, 2), "notes": notes[:4]}
+
     async def _safe_headlines(self) -> list[dict[str, Any]]:
         try:
             return await self.news_client.fetch_market_news()
@@ -173,6 +205,12 @@ class Spy0DteService:
             return await self.econ_client.fetch_events(date.today())
         except Exception:
             return []
+
+    async def _safe_latest_price(self, symbol: str) -> float:
+        try:
+            return self._safe_float(await self.market_client.get_latest_price(symbol))
+        except Exception:
+            return 0.0
 
     async def _safe_chain_rows(self, symbol: str = "SPY") -> list[dict[str, Any]]:
         if self.tradier_client is None or not hasattr(self.tradier_client, "get_options_chain"):
@@ -215,6 +253,7 @@ class Spy0DteService:
         premarket, regular, opening_range = self._today_frames(minute_df)
         active = regular if not regular.empty else premarket if not premarket.empty else minute_df.tail(80)
         latest = self._safe_float(active["close"].iloc[-1]) if not active.empty else self._safe_float(await self.market_client.get_latest_price("SPY"))
+        prev_close = self._safe_float(daily_df["close"].dropna().iloc[-2]) if not daily_df.empty and len(daily_df["close"].dropna()) >= 2 else 0.0
         rsi_5m = self._rsi(active["close"]) if not active.empty else 50.0
         rsi_daily = self._rsi(daily_df["close"]) if not daily_df.empty else 50.0
         vwap = self._vwap(regular if not regular.empty else active)
@@ -222,12 +261,17 @@ class Spy0DteService:
         events = await self._safe_events()
         chain_rows = await self._safe_chain_rows("SPY")
         structure = self._structure(latest, vwap, rsi_5m, regular, opening_range)
+        xsp_latest = await self._safe_latest_price("I:XSP")
+        spx_latest = await self._safe_latest_price("I:SPX")
         return {
             "timestamp": datetime.now(self.market_tz).isoformat(timespec="seconds"),
             "latest": latest,
+            "prev_close": prev_close,
             "vwap": vwap,
             "rsi_5m": rsi_5m,
             "rsi_daily": rsi_daily,
+            "xsp_latest": xsp_latest,
+            "spx_latest": spx_latest,
             "premarket_high": self._safe_float(premarket["high"].max()) if not premarket.empty else 0.0,
             "premarket_low": self._safe_float(premarket["low"].min()) if not premarket.empty else 0.0,
             "opening_range_high": self._safe_float(opening_range["high"].max()) if not opening_range.empty else 0.0,
@@ -244,11 +288,13 @@ class Spy0DteService:
             "chain_contracts": len(chain_rows),
             "zones": self._chain_zones(latest, chain_rows),
             "structure": structure,
+            "cross_confirmation": self._cross_confirmation(latest, prev_close, structure, xsp_latest, spx_latest),
         }
 
     def format_report(self, payload: dict[str, Any], title: str) -> str:
         structure = payload.get("structure", {})
         zones = payload.get("zones", {})
+        cross = payload.get("cross_confirmation", {})
         lines = [
             f"<b>{escape(title)}</b>",
             f"<i>{escape(str(payload.get('timestamp', '')))}</i>",
@@ -257,9 +303,10 @@ class Spy0DteService:
             f"• Structure: {escape(str(structure.get('bias', 'balanced / tactical')))} | Score: {escape(str(structure.get('score', 0)))}",
             f"• Day Type: {escape(str(structure.get('day_type', 'rotation / mean-reversion structure')))}",
             f"• Volatility State: {escape(str(payload.get('volatility_state', 'unknown')))}",
+            f"• Cross Confirmation: {escape(str(cross.get('state', 'n/a')))} | SPY Change: {escape(str(cross.get('spy_change_pct', 0.0)))}%",
             "",
             "<b>PRICE STRUCTURE</b>",
-            f"• SPY Last: {self._price(payload.get('latest'))}",
+            f"• SPY Last: {self._price(payload.get('latest'))} | XSP: {self._price(payload.get('xsp_latest'))} | SPX: {self._price(payload.get('spx_latest'))}",
             f"• VWAP: {self._price(payload.get('vwap'))}",
             f"• Premarket High/Low: {self._price(payload.get('premarket_high'))} / {self._price(payload.get('premarket_low'))}",
             f"• OR Ceiling/Floor: {self._price(payload.get('opening_range_high'))} / {self._price(payload.get('opening_range_low'))}",
@@ -279,6 +326,8 @@ class Spy0DteService:
         lines.extend(f"• {escape(str(item))}" for item in payload.get("volume_nodes", [])[:4])
         lines.extend(["", "<b>SWEEP / RANGE NOTES</b>"])
         lines.extend(f"• {escape(str(item))}" for item in payload.get("sweep_notes", [])[:4])
+        lines.extend(["", "<b>CROSS-CHECK NOTES</b>"])
+        lines.extend(f"• {escape(str(item))}" for item in cross.get("notes", [])[:4])
         lines.extend([
             "",
             "<b>CATALYSTS / SENTIMENT</b>",

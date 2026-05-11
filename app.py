@@ -28,6 +28,7 @@ from services.trade_review_service import TradeReviewService
 from services.premarket_service import PremarketService
 from services.midday_service import MiddayService
 from services.postmarket_service import PostmarketService
+from services.spy_0dte_service import Spy0DteService
 from services.live_execution_service import LiveExecutionService
 from services.options_chain_ingest_service import OptionsChainIngestService
 from services.options_chain_service import OptionsChainService
@@ -266,6 +267,15 @@ async def main() -> None:
             config_service,
             alert_repo,
         )
+        spy_0dte = Spy0DteService(
+            telegram_app,
+            settings.telegram_admin_chat_id,
+            market,
+            news,
+            econ,
+            tradier_client=tradier_market_data,
+        )
+        app_services["spy_0dte_service"] = spy_0dte
         midday = MiddayService(
             telegram_app,
             settings.telegram_admin_chat_id,
@@ -280,7 +290,7 @@ async def main() -> None:
         scheduler = build_scheduler(settings.app_timezone)
         register_jobs(
             scheduler,
-            {"premarket": premarket, "midday": midday, "postmarket": postmarket},
+            {"premarket": premarket, "spy_0dte": spy_0dte, "midday": midday, "postmarket": postmarket},
             settings.app_timezone,
         )
         scheduler.start()

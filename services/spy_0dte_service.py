@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from data.sentiment import analyze_sentiment
+from services.dealer_gamma_service import DealerGammaService
 
 
 class Spy0DteService:
@@ -21,6 +22,7 @@ class Spy0DteService:
         self.econ_client = econ_client
         self.tradier_client = tradier_client
         self.market_tz = ZoneInfo("America/New_York")
+        self.dealer_gamma = DealerGammaService()
 
     def _safe_float(self, value: Any, default: float = 0.0) -> float:
         try:
@@ -197,6 +199,7 @@ class Spy0DteService:
     def _confidence(self, payload: dict[str, Any]) -> dict[str, Any]:
         structure = payload.get("structure", {})
         cross = payload.get("cross_confirmation", {})
+        dealer = payload.get("dealer_gamma", {})
         score = abs(int(structure.get("score", 0)))
         notes: list[str] = []
         if structure.get("bias") != "balanced / tactical":
@@ -215,6 +218,16 @@ class Spy0DteService:
         elif "compressed" in vol_state:
             score -= 10
             notes.append("Compressed volatility raises chop/pin risk.")
+        dealer_regime = str(dealer.get("dealer_regime", ""))
+        if "pin risk" in dealer_regime:
+            score -= 10
+            notes.append("Dealer gamma layer warns of pin/mean-reversion risk.")
+        elif "hedge pressure" in dealer_regime:
+            score += 5
+            notes.append("Dealer gamma layer shows potential acceleration pressure.")
+        elif "chase pressure" in dealer_regime:
+            score += 5
+            notes.append("Dealer gamma layer shows potential squeeze/chase pressure.")
         rsi = self._safe_float(payload.get("rsi_5m"), 50.0)
         if 40 <= rsi <= 68:
             score += 10
@@ -235,13 +248,17 @@ class Spy0DteService:
         else:
             grade = "NO-TRADE / WAIT"
         trend_probability = max(20, min(80, 50 + int(structure.get("score", 0)) // 2))
+        if "pin risk" in dealer_regime:
+            trend_probability = max(20, trend_probability - 10)
+        elif "hedge pressure" in dealer_regime or "chase pressure" in dealer_regime:
+            trend_probability = min(80, trend_probability + 5)
         mean_reversion_probability = 100 - trend_probability
         return {
             "score": score,
             "grade": grade,
             "trend_probability": trend_probability,
             "mean_reversion_probability": mean_reversion_probability,
-            "notes": notes[:5],
+            "notes": notes[:6],
         }
 
     async def _safe_headlines(self) -> list[dict[str, Any]]:
@@ -276,27 +293,6 @@ class Spy0DteService:
         except Exception:
             return []
 
-    def _chain_zones(self, latest: float, chain_rows: list[dict[str, Any]]) -> dict[str, str]:
-        if not latest or not chain_rows:
-            return {"pin": "n/a", "support": "n/a", "resistance": "n/a", "flip": "n/a"}
-        weights: dict[float, float] = {}
-        for row in chain_rows:
-            strike = self._safe_float(row.get("strike"))
-            open_interest = self._safe_float(row.get("open_interest") or row.get("openInterest"))
-            volume = self._safe_float(row.get("volume"))
-            if strike:
-                weights[strike] = weights.get(strike, 0.0) + open_interest + (volume * 0.25)
-        if not weights:
-            return {"pin": "n/a", "support": "n/a", "resistance": "n/a", "flip": "n/a"}
-        ranked = sorted(weights.items(), key=lambda item: item[1], reverse=True)
-        pin = ranked[0][0]
-        above = [strike for strike, _ in ranked if strike > latest]
-        below = [strike for strike, _ in ranked if strike < latest]
-        resistance = min(above, key=lambda value: abs(value - latest)) if above else pin
-        support = min(below, key=lambda value: abs(value - latest)) if below else pin
-        flip = (support + resistance) / 2 if support and resistance else pin
-        return {"pin": f"{pin:.2f}", "support": f"{support:.2f}", "resistance": f"{resistance:.2f}", "flip": f"{flip:.2f}"}
-
     async def analyze(self) -> dict[str, Any]:
         minute_df = await self.market_client.get_historical_data("SPY", multiplier=5, timespan="minute")
         daily_df = await self.market_client.get_historical_data("SPY", multiplier=1, timespan="day")
@@ -310,6 +306,7 @@ class Spy0DteService:
         headlines = await self._safe_headlines()
         events = await self._safe_events()
         chain_rows = await self._safe_chain_rows("SPY")
+        dealer_gamma = self.dealer_gamma.summarize(latest, chain_rows).as_dict()
         structure = self._structure(latest, vwap, rsi_5m, regular, opening_range)
         xsp_latest = await self._safe_latest_price("I:XSP")
         spx_latest = await self._safe_latest_price("I:SPX")
@@ -336,7 +333,8 @@ class Spy0DteService:
             "events": self.econ_client.summarize_events(events, limit=5) if hasattr(self.econ_client, "summarize_events") else [],
             "high_impact_count": len([e for e in events if e.get("impact_label") == "high"]),
             "chain_contracts": len(chain_rows),
-            "zones": self._chain_zones(latest, chain_rows),
+            "zones": dealer_gamma,
+            "dealer_gamma": dealer_gamma,
             "structure": structure,
         }
         payload["cross_confirmation"] = self._cross_confirmation(latest, prev_close, structure, xsp_latest, spx_latest)
@@ -348,6 +346,7 @@ class Spy0DteService:
         zones = payload.get("zones", {})
         cross = payload.get("cross_confirmation", {})
         confidence = payload.get("confidence", {})
+        dealer = payload.get("dealer_gamma", {})
         lines = [
             f"<b>{escape(title)}</b>",
             f"<i>{escape(str(payload.get('timestamp', '')))}</i>",
@@ -358,6 +357,7 @@ class Spy0DteService:
             f"• Probability: Trend {escape(str(confidence.get('trend_probability', 50)))}% / Mean-Reversion {escape(str(confidence.get('mean_reversion_probability', 50)))}%",
             f"• Day Type: {escape(str(structure.get('day_type', 'rotation / mean-reversion structure')))}",
             f"• Volatility State: {escape(str(payload.get('volatility_state', 'unknown')))}",
+            f"• Dealer Regime: {escape(str(dealer.get('dealer_regime', 'unknown')))} | Exposure: {escape(str(dealer.get('exposure_score', 0)))}",
             f"• Cross Confirmation: {escape(str(cross.get('state', 'n/a')))} | SPY Change: {escape(str(cross.get('spy_change_pct', 0.0)))}%",
             "",
             "<b>PRICE STRUCTURE</b>",
@@ -371,9 +371,10 @@ class Spy0DteService:
             f"• 5m RSI: {escape(str(payload.get('rsi_5m')))} | Daily RSI: {escape(str(payload.get('rsi_daily')))}",
             "• Watch RSI extremes for bounce/pullback risk before trusting range continuation.",
             "",
-            "<b>OPTION-CHAIN CONCENTRATION</b>",
+            "<b>DEALER / GAMMA ESTIMATE</b>",
             f"• Pin: {escape(str(zones.get('pin', 'n/a')))} | Flip: {escape(str(zones.get('flip', 'n/a')))}",
             f"• Support: {escape(str(zones.get('support', 'n/a')))} | Resistance: {escape(str(zones.get('resistance', 'n/a')))}",
+            f"• Regime: {escape(str(dealer.get('dealer_regime', 'unknown')))} | Exposure Score: {escape(str(dealer.get('exposure_score', 0)))}",
             f"• Contracts Sampled: {payload.get('chain_contracts', 0)}",
             "",
             "<b>VOLUME PROFILE / LIQUIDITY</b>",
@@ -381,10 +382,12 @@ class Spy0DteService:
         lines.extend(f"• {escape(str(item))}" for item in payload.get("volume_nodes", [])[:4])
         lines.extend(["", "<b>SWEEP / RANGE NOTES</b>"])
         lines.extend(f"• {escape(str(item))}" for item in payload.get("sweep_notes", [])[:4])
+        lines.extend(["", "<b>DEALER / GAMMA NOTES</b>"])
+        lines.extend(f"• {escape(str(item))}" for item in dealer.get("notes", [])[:4])
         lines.extend(["", "<b>CROSS-CHECK NOTES</b>"])
         lines.extend(f"• {escape(str(item))}" for item in cross.get("notes", [])[:4])
         lines.extend(["", "<b>CONFIDENCE NOTES</b>"])
-        lines.extend(f"• {escape(str(item))}" for item in confidence.get("notes", [])[:5])
+        lines.extend(f"• {escape(str(item))}" for item in confidence.get("notes", [])[:6])
         lines.extend([
             "",
             "<b>CATALYSTS / SENTIMENT</b>",

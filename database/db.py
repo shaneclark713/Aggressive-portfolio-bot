@@ -127,5 +127,24 @@ def init_db(db_path: PathInput = None) -> None:
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS spy_scan_journal (
+            scan_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scan_type TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            symbol TEXT NOT NULL DEFAULT 'SPY',
+            latest REAL,
+            structure_bias TEXT,
+            structure_score INTEGER,
+            confidence_grade TEXT,
+            confidence_score INTEGER,
+            trend_probability INTEGER,
+            mean_reversion_probability INTEGER,
+            dealer_regime TEXT,
+            dealer_exposure_score INTEGER,
+            payload TEXT NOT NULL
+        )
+    """)
+
     conn.commit()
     conn.close()

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+from collections import defaultdict
 from datetime import datetime
 from typing import Any
 
 
 class SpyScanJournalRepository:
-    """Persistence layer for SPY/XSP desk scan history."""
+    """Persistence layer for SPY/XSP desk scan history and outcome analytics."""
+
+    VALID_OUTCOMES = {"win", "loss", "neutral", "skip"}
 
     def __init__(self, conn):
         self.conn = conn
@@ -53,27 +56,47 @@ class SpyScanJournalRepository:
         self.conn.commit()
         return int(cursor.lastrowid)
 
-    def recent_scans(self, limit: int = 10, scan_type: str | None = None) -> list[dict[str, Any]]:
+    def mark_outcome(self, scan_id: int, outcome: str, notes: str | None = None) -> dict[str, Any] | None:
+        normalized = str(outcome or "").strip().lower()
+        if normalized not in self.VALID_OUTCOMES:
+            raise ValueError(f"outcome must be one of: {', '.join(sorted(self.VALID_OUTCOMES))}")
         cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            UPDATE spy_scan_journal
+            SET outcome = ?, outcome_notes = ?, outcome_marked_at = ?
+            WHERE scan_id = ?
+            """,
+            (normalized, notes or "", datetime.utcnow().isoformat(), int(scan_id)),
+        )
+        self.conn.commit()
+        return self.get_scan(int(scan_id))
+
+    def get_scan(self, scan_id: int) -> dict[str, Any] | None:
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM spy_scan_journal WHERE scan_id = ?", (int(scan_id),))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def recent_scans(self, limit: int = 10, scan_type: str | None = None, only_marked: bool = False) -> list[dict[str, Any]]:
+        cursor = self.conn.cursor()
+        filters = []
+        params: list[Any] = []
         if scan_type:
-            cursor.execute(
-                """
-                SELECT * FROM spy_scan_journal
-                WHERE scan_type = ?
-                ORDER BY scan_id DESC
-                LIMIT ?
-                """,
-                (scan_type, int(limit)),
-            )
-        else:
-            cursor.execute(
-                """
-                SELECT * FROM spy_scan_journal
-                ORDER BY scan_id DESC
-                LIMIT ?
-                """,
-                (int(limit),),
-            )
+            filters.append("scan_type = ?")
+            params.append(scan_type)
+        if only_marked:
+            filters.append("outcome IS NOT NULL")
+        where = f"WHERE {' AND '.join(filters)}" if filters else ""
+        cursor.execute(
+            f"""
+            SELECT * FROM spy_scan_journal
+            {where}
+            ORDER BY scan_id DESC
+            LIMIT ?
+            """,
+            (*params, int(limit)),
+        )
         return [dict(row) for row in cursor.fetchall()]
 
     def summarize_recent(self, limit: int = 10) -> dict[str, Any]:
@@ -88,3 +111,44 @@ class SpyScanJournalRepository:
             "avg_confidence": round(sum(confidence_values) / max(len(confidence_values), 1), 2),
             "avg_trend_probability": round(sum(trend_values) / max(len(trend_values), 1), 2),
         }
+
+    def accuracy_summary(self, limit: int = 100) -> dict[str, Any]:
+        rows = self.recent_scans(limit=limit, only_marked=True)
+        scored = [row for row in rows if row.get("outcome") in {"win", "loss"}]
+        wins = [row for row in scored if row.get("outcome") == "win"]
+        losses = [row for row in scored if row.get("outcome") == "loss"]
+        win_rate = round((len(wins) / len(scored)) * 100.0, 2) if scored else 0.0
+        avg_win_conf = round(sum(float(row.get("confidence_score") or 0) for row in wins) / max(len(wins), 1), 2) if wins else 0.0
+        avg_loss_conf = round(sum(float(row.get("confidence_score") or 0) for row in losses) / max(len(losses), 1), 2) if losses else 0.0
+        return {
+            "marked_count": len(rows),
+            "scored_count": len(scored),
+            "wins": len(wins),
+            "losses": len(losses),
+            "win_rate": win_rate,
+            "avg_win_confidence": avg_win_conf,
+            "avg_loss_confidence": avg_loss_conf,
+            "rows": rows,
+        }
+
+    def regime_summary(self, limit: int = 250) -> list[dict[str, Any]]:
+        rows = self.recent_scans(limit=limit, only_marked=True)
+        buckets: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for row in rows:
+            regime = row.get("dealer_regime") or "unknown"
+            buckets[str(regime)].append(row)
+        summary: list[dict[str, Any]] = []
+        for regime, items in buckets.items():
+            scored = [row for row in items if row.get("outcome") in {"win", "loss"}]
+            wins = [row for row in scored if row.get("outcome") == "win"]
+            win_rate = round((len(wins) / len(scored)) * 100.0, 2) if scored else 0.0
+            avg_conf = round(sum(float(row.get("confidence_score") or 0) for row in scored) / max(len(scored), 1), 2) if scored else 0.0
+            summary.append({
+                "dealer_regime": regime,
+                "marked_count": len(items),
+                "scored_count": len(scored),
+                "wins": len(wins),
+                "win_rate": win_rate,
+                "avg_confidence": avg_conf,
+            })
+        return sorted(summary, key=lambda row: (row["scored_count"], row["win_rate"]), reverse=True)

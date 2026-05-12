@@ -54,6 +54,13 @@ def connect_db(db_path: PathInput = None) -> sqlite3.Connection:
     return conn
 
 
+def _add_column_if_missing(cursor: sqlite3.Cursor, table_name: str, column_name: str, column_definition: str) -> None:
+    cursor.execute(f"PRAGMA table_info({table_name})")
+    existing_columns = {row[1] for row in cursor.fetchall()}
+    if column_name not in existing_columns:
+        cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}")
+
+
 def init_db(db_path: PathInput = None) -> None:
     conn = connect_db(db_path)
     cursor = conn.cursor()
@@ -145,6 +152,10 @@ def init_db(db_path: PathInput = None) -> None:
             payload TEXT NOT NULL
         )
     """)
+
+    _add_column_if_missing(cursor, "spy_scan_journal", "outcome", "TEXT")
+    _add_column_if_missing(cursor, "spy_scan_journal", "outcome_notes", "TEXT")
+    _add_column_if_missing(cursor, "spy_scan_journal", "outcome_marked_at", "TEXT")
 
     conn.commit()
     conn.close()

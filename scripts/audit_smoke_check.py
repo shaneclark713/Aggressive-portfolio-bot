@@ -14,6 +14,7 @@ REQUIRED_MODULES = [
     "brokers.execution_router",
     "config.schedules",
     "core.scheduler",
+    "services.dealer_gamma_service",
     "services.position_sync_service",
     "services.spy_0dte_service",
     "telegram_bot.bot",
@@ -82,12 +83,30 @@ def _check_demo_fallback_guard() -> list[str]:
     return failures
 
 
+def _check_dealer_gamma() -> list[str]:
+    from services.dealer_gamma_service import DealerGammaService
+
+    failures: list[str] = []
+    service = DealerGammaService()
+    rows = [
+        {"strike": 500, "open_interest": 1000, "volume": 100, "option_type": "call", "gamma": 0.02},
+        {"strike": 495, "open_interest": 800, "volume": 80, "option_type": "put", "gamma": 0.03},
+        {"strike": 505, "open_interest": 700, "volume": 60, "option_type": "call", "gamma": 0.01},
+    ]
+    payload = service.summarize(500.0, rows).as_dict()
+    for key in ("pin", "flip", "support", "resistance", "dealer_regime", "exposure_score", "notes"):
+        if key not in payload:
+            failures.append(f"Dealer gamma summary missing {key}")
+    return failures
+
+
 def main() -> int:
     checks = {
         "imports": _check_imports,
         "schedules": _check_schedules,
         "order_request": _check_order_request,
         "demo_fallback_guard": _check_demo_fallback_guard,
+        "dealer_gamma": _check_dealer_gamma,
     }
     failures: list[str] = []
     for name, check in checks.items():

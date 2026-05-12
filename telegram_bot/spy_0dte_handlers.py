@@ -50,26 +50,75 @@ def _estimate_underlying_from_chain(rows: list[dict]) -> float:
     return 0.0
 
 
+def _format_scan_history(summary: dict) -> str:
+    rows = summary.get("rows", []) or []
+    if not rows:
+        return "<b>SPY/XSP Scan History</b>\n\nNo saved scans yet."
+    lines = [
+        "<b>SPY/XSP Scan History</b>",
+        "",
+        f"• Saved Scans Shown: {summary.get('count', len(rows))}",
+        f"• Avg Confidence: {summary.get('avg_confidence', 0.0)}",
+        f"• Avg Trend Probability: {summary.get('avg_trend_probability', 0.0)}%",
+        "",
+        "<b>Recent Scans</b>",
+    ]
+    for row in rows[:10]:
+        lines.append(
+            "• "
+            f"#{row.get('scan_id')} "
+            f"{row.get('scan_type', 'scan')} | "
+            f"{row.get('created_at', '')} | "
+            f"{row.get('structure_bias', 'n/a')} | "
+            f"Conf {row.get('confidence_grade', 'n/a')} {row.get('confidence_score', 'n/a')} | "
+            f"Trend {row.get('trend_probability', 'n/a')}% | "
+            f"Dealer {row.get('dealer_regime', 'n/a')}"
+        )
+    return "\n".join(lines)
+
+
 def build_spy_0dte_handlers(app_services: dict, admin_chat_id: int):
     """Dedicated SPY/XSP desk commands kept outside the large legacy handler file."""
 
     def _service():
         return app_services.get("spy_0dte_service")
 
+    def _journal_repo():
+        return app_services.get("spy_scan_journal_repo")
+
     async def spy_health_command(update, context):
         if not await _is_authorized(update, admin_chat_id):
             return
         service = _service()
+        journal = _journal_repo()
         await update.message.reply_text(
             "\n".join([
                 "SPY/XSP service health:",
                 f"configured={service is not None}",
+                f"journal_repo={journal is not None}",
                 f"market_client={getattr(service, 'market_client', None) is not None if service else False}",
                 f"news_client={getattr(service, 'news_client', None) is not None if service else False}",
                 f"econ_client={getattr(service, 'econ_client', None) is not None if service else False}",
                 f"tradier_client={getattr(service, 'tradier_client', None) is not None if service else False}",
             ])
         )
+
+    async def spy_history_command(update, context):
+        if not await _is_authorized(update, admin_chat_id):
+            return
+        journal = _journal_repo()
+        if journal is None:
+            await update.message.reply_text("SPY/XSP scan journal is not configured.")
+            return
+        try:
+            limit = 10
+            if context.args:
+                limit = max(1, min(25, int(context.args[0])))
+            summary = journal.summarize_recent(limit=limit)
+            await update.message.reply_text(_format_scan_history(summary), parse_mode="HTML")
+        except Exception as exc:
+            logger.exception("SPY/XSP history command failed: %s", exc)
+            await update.message.reply_text(f"SPY/XSP history failed: {type(exc).__name__}: {exc}")
 
     async def spy_chain_gamma_command(update, context):
         if not await _is_authorized(update, admin_chat_id):
@@ -188,6 +237,7 @@ def build_spy_0dte_handlers(app_services: dict, admin_chat_id: int):
 
     return [
         CommandHandler("spy_health", spy_health_command),
+        CommandHandler("spy_history", spy_history_command),
         CommandHandler("spy_chain_gamma", spy_chain_gamma_command),
         CommandHandler("spy_0dte", spy_0dte_command),
         CommandHandler("spy_midday", spy_midday_command),

@@ -66,8 +66,36 @@ def build_spy_0dte_handlers(app_services: dict, admin_chat_id: int):
         ])
         await update.message.reply_text(text, parse_mode="HTML")
 
+    async def spy_gamma_command(update, context):
+        if not await _is_authorized(update, admin_chat_id):
+            return
+        service = app_services.get("spy_0dte_service")
+        if service is None:
+            await update.message.reply_text("SPY/XSP 0DTE service is not configured.")
+            return
+        payload = await service.analyze()
+        dealer = payload.get("dealer_gamma", {})
+        zones = payload.get("zones", {})
+        lines = [
+            "<b>SPY/XSP Dealer Gamma Read</b>",
+            "",
+            f"• Dealer Regime: {dealer.get('dealer_regime', 'unknown')}",
+            f"• Exposure Score: {dealer.get('exposure_score', 0)}",
+            f"• Pin: {zones.get('pin', 'n/a')}",
+            f"• Flip: {zones.get('flip', 'n/a')}",
+            f"• Support: {zones.get('support', 'n/a')}",
+            f"• Resistance: {zones.get('resistance', 'n/a')}",
+            f"• Contracts Sampled: {payload.get('chain_contracts', 0)}",
+            "",
+            "<b>Dealer Notes</b>",
+        ]
+        notes = dealer.get("notes", []) or ["Dealer gamma data unavailable or not enough chain data loaded."]
+        lines.extend(f"• {item}" for item in notes[:4])
+        await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
     return [
         CommandHandler("spy_0dte", spy_0dte_command),
         CommandHandler("spy_midday", spy_midday_command),
         CommandHandler("spy_levels", spy_levels_command),
+        CommandHandler("spy_gamma", spy_gamma_command),
     ]

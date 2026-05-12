@@ -76,6 +76,7 @@ Run these from the admin chat only:
 /spy_0dte
 /spy_midday
 /spy_levels
+/spy_gamma
 ```
 
 Expected safety behavior:
@@ -98,7 +99,8 @@ The 6:15 and 7:00 Pacific scheduled reports should include:
 - volatility state
 - volume profile nodes
 - sweep/range notes
-- option-chain concentration zones when Tradier data is available
+- dealer/gamma regime and exposure score
+- pin / flip / support / resistance zones when Tradier data is available
 - SPY/XSP/SPX cross-confirmation when Polygon data is available
 - confidence grade
 - trend vs mean-reversion probability
@@ -108,7 +110,7 @@ The 6:15 and 7:00 Pacific scheduled reports should include:
 ## Known optional data behavior
 
 - XSP/SPX cross-confirmation is optional. If the market data provider does not return index symbols through the configured endpoint, the report should continue using SPY-only structure and show the cross-check as unavailable.
-- Option-chain concentration zones depend on Tradier chain availability. If Tradier is not configured or returns no chain, the report should continue without crashing.
+- Dealer/gamma zones depend on Tradier chain availability. If Tradier is not configured or returns no chain, the report should continue without crashing.
 
 ## Local smoke check before merge/redeploy
 

@@ -120,6 +120,30 @@ def _format_regimes(rows: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _format_setup_score(score: dict) -> str:
+    lines = [
+        "<b>SPY/XSP Setup Score</b>",
+        "",
+        f"• Grade: {score.get('grade', 'n/a')}",
+        f"• Score: {score.get('score', 0)} / 100",
+        f"• Action: {score.get('action', 'n/a')}",
+        f"• Dealer Regime: {score.get('dealer_regime', 'unknown')}",
+        f"• Confidence: {score.get('confidence_score', 0)}",
+        f"• Structure Strength: {score.get('structure_score', 0)}",
+        f"• Trend Probability: {score.get('trend_probability', 0)}%",
+        f"• Mean-Reversion Probability: {score.get('mean_reversion_probability', 0)}%",
+    ]
+    reasons = score.get("reasons", []) or []
+    warnings = score.get("warnings", []) or []
+    if reasons:
+        lines.extend(["", "<b>Positive Factors</b>"])
+        lines.extend(f"• {item}" for item in reasons[:6])
+    if warnings:
+        lines.extend(["", "<b>Warnings</b>"])
+        lines.extend(f"• {item}" for item in warnings[:6])
+    return "\n".join(lines)
+
+
 def build_spy_0dte_handlers(app_services: dict, admin_chat_id: int):
     """Dedicated SPY/XSP desk commands kept outside the large legacy handler file."""
 
@@ -129,22 +153,44 @@ def build_spy_0dte_handlers(app_services: dict, admin_chat_id: int):
     def _journal_repo():
         return app_services.get("spy_scan_journal_repo")
 
+    def _setup_scorer():
+        return app_services.get("spy_setup_score_service")
+
     async def spy_health_command(update, context):
         if not await _is_authorized(update, admin_chat_id):
             return
         service = _service()
         journal = _journal_repo()
+        scorer = _setup_scorer()
         await update.message.reply_text(
             "\n".join([
                 "SPY/XSP service health:",
                 f"configured={service is not None}",
                 f"journal_repo={journal is not None}",
+                f"setup_scorer={scorer is not None}",
                 f"market_client={getattr(service, 'market_client', None) is not None if service else False}",
                 f"news_client={getattr(service, 'news_client', None) is not None if service else False}",
                 f"econ_client={getattr(service, 'econ_client', None) is not None if service else False}",
                 f"tradier_client={getattr(service, 'tradier_client', None) is not None if service else False}",
             ])
         )
+
+    async def spy_setup_score_command(update, context):
+        if not await _is_authorized(update, admin_chat_id):
+            return
+        service = _service()
+        scorer = _setup_scorer()
+        if service is None or scorer is None:
+            await update.message.reply_text("SPY/XSP setup scoring is not configured.")
+            return
+        try:
+            await update.message.reply_text("Scoring current SPY/XSP setup...")
+            payload = await service.analyze()
+            score = scorer.score_payload(payload)
+            await update.message.reply_text(_format_setup_score(score), parse_mode="HTML")
+        except Exception as exc:
+            logger.exception("SPY/XSP setup score command failed: %s", exc)
+            await update.message.reply_text(f"SPY/XSP setup score failed: {type(exc).__name__}: {exc}")
 
     async def spy_history_command(update, context):
         if not await _is_authorized(update, admin_chat_id):
@@ -357,6 +403,7 @@ def build_spy_0dte_handlers(app_services: dict, admin_chat_id: int):
 
     return [
         CommandHandler("spy_health", spy_health_command),
+        CommandHandler("spy_setup_score", spy_setup_score_command),
         CommandHandler("spy_history", spy_history_command),
         CommandHandler("spy_mark_win", spy_mark_win_command),
         CommandHandler("spy_mark_loss", spy_mark_loss_command),

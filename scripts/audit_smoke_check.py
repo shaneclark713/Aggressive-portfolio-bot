@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -14,9 +15,12 @@ REQUIRED_MODULES = [
     "brokers.execution_router",
     "config.schedules",
     "core.scheduler",
+    "database.spy_scan_repository",
     "services.dealer_gamma_service",
     "services.position_sync_service",
     "services.spy_0dte_service",
+    "services.spy_scan_journal_service",
+    "services.spy_setup_score_service",
     "telegram_bot.bot",
     "telegram_bot.handlers",
     "telegram_bot.spy_0dte_handlers",
@@ -100,6 +104,72 @@ def _check_dealer_gamma() -> list[str]:
     return failures
 
 
+def _check_phase2_analytics() -> list[str]:
+    from database.db import init_db
+    from database.spy_scan_repository import SpyScanJournalRepository
+    from services.spy_setup_score_service import SpySetupScoreService
+
+    failures: list[str] = []
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    try:
+        init_db(":memory:")
+        # init_db opens its own connection for file paths. For the in-memory smoke test,
+        # create only the table needed by the repository so the repo methods are validated.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS spy_scan_journal (
+                scan_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                scan_type TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                symbol TEXT NOT NULL DEFAULT 'SPY',
+                latest REAL,
+                structure_bias TEXT,
+                structure_score INTEGER,
+                confidence_grade TEXT,
+                confidence_score INTEGER,
+                trend_probability INTEGER,
+                mean_reversion_probability INTEGER,
+                dealer_regime TEXT,
+                dealer_exposure_score INTEGER,
+                payload TEXT NOT NULL,
+                outcome TEXT,
+                outcome_notes TEXT,
+                outcome_marked_at TEXT
+            )
+        """)
+        repo = SpyScanJournalRepository(conn)
+        scan_id = repo.record_scan(
+            "smoke",
+            {
+                "timestamp": "2026-01-01T09:30:00",
+                "latest": 500.0,
+                "structure": {"bias": "upside structure", "score": 50},
+                "confidence": {"grade": "A", "score": 72, "trend_probability": 70, "mean_reversion_probability": 30},
+                "dealer_gamma": {"dealer_regime": "hedge pressure", "exposure_score": 45},
+            },
+        )
+        repo.mark_outcome(scan_id, "win", "smoke")
+        accuracy = repo.accuracy_summary(limit=10)
+        if accuracy.get("wins") != 1:
+            failures.append("SPY scan repository did not record win outcome")
+        scorer = SpySetupScoreService(repo)
+        score = scorer.score_payload(
+            {
+                "structure": {"score": 50},
+                "confidence": {"score": 72, "trend_probability": 70, "mean_reversion_probability": 30},
+                "dealer_gamma": {"dealer_regime": "hedge pressure", "exposure_score": 45},
+                "high_impact_count": 0,
+                "data_quality": {},
+            }
+        )
+        for key in ("score", "grade", "action", "reasons", "warnings", "calibration"):
+            if key not in score:
+                failures.append(f"SPY setup score missing {key}")
+    finally:
+        conn.close()
+    return failures
+
+
 def main() -> int:
     checks = {
         "imports": _check_imports,
@@ -107,6 +177,7 @@ def main() -> int:
         "order_request": _check_order_request,
         "demo_fallback_guard": _check_demo_fallback_guard,
         "dealer_gamma": _check_dealer_gamma,
+        "phase2_analytics": _check_phase2_analytics,
     }
     failures: list[str] = []
     for name, check in checks.items():

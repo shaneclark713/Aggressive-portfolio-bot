@@ -4,7 +4,7 @@ from typing import Any
 
 
 class SpySetupScoreService:
-    """Score SPY/XSP 0DTE desk setups from scan payloads and historical regime stats.
+    """Score SPY/XSP 0DTE desk setups from scan payloads and historical results.
 
     This service is analysis-only. It does not place trades or authorize execution.
     """
@@ -73,8 +73,22 @@ class SpySetupScoreService:
         regime_edge = self._historical_regime_edge(dealer_regime)
         if regime_edge:
             score += int(regime_edge.get("score_adjustment", 0))
-            if regime_edge.get("note"):
-                reasons.append(str(regime_edge["note"]))
+            note = regime_edge.get("note")
+            if note:
+                if regime_edge.get("score_adjustment", 0) < 0:
+                    warnings.append(str(note))
+                else:
+                    reasons.append(str(note))
+
+        calibration = self._confidence_calibration(confidence_score)
+        if calibration:
+            score += int(calibration.get("score_adjustment", 0))
+            note = calibration.get("note")
+            if note:
+                if calibration.get("score_adjustment", 0) < 0:
+                    warnings.append(str(note))
+                else:
+                    reasons.append(str(note))
 
         score = max(0, min(100, score))
         grade = self._grade(score)
@@ -90,6 +104,7 @@ class SpySetupScoreService:
             "structure_score": structure_score,
             "trend_probability": trend_probability,
             "mean_reversion_probability": mean_reversion_probability,
+            "calibration": calibration or {},
         }
 
     def _historical_regime_edge(self, dealer_regime: str) -> dict[str, Any] | None:
@@ -112,6 +127,40 @@ class SpySetupScoreService:
                 return {"score_adjustment": -8, "note": f"This dealer regime has historically weak results ({win_rate}% win rate)."}
             return {"score_adjustment": 0, "note": f"This dealer regime is historically mixed ({win_rate}% win rate)."}
         return None
+
+    def _confidence_calibration(self, confidence_score: float) -> dict[str, Any] | None:
+        """Compare current confidence bucket against marked historical outcomes."""
+        if self.journal_repo is None:
+            return None
+        try:
+            summary = self.journal_repo.accuracy_summary(limit=250)
+        except Exception:
+            return None
+        rows = summary.get("rows", []) or []
+        scored = [row for row in rows if row.get("outcome") in {"win", "loss"}]
+        if len(scored) < 8:
+            return {"score_adjustment": 0, "note": "Confidence calibration sample is still small."}
+
+        low, high, label = self._confidence_bucket(confidence_score)
+        bucket = [row for row in scored if low <= self._to_float(row.get("confidence_score"), 0.0) < high]
+        if len(bucket) < 5:
+            return {"score_adjustment": 0, "note": f"{label} confidence bucket has a small sample."}
+        wins = [row for row in bucket if row.get("outcome") == "win"]
+        win_rate = round((len(wins) / len(bucket)) * 100.0, 2)
+        if win_rate >= 65:
+            return {"score_adjustment": 7, "note": f"{label} confidence bucket is historically reliable ({win_rate}% win rate)."}
+        if win_rate <= 40:
+            return {"score_adjustment": -10, "note": f"{label} confidence bucket has underperformed ({win_rate}% win rate)."}
+        return {"score_adjustment": 0, "note": f"{label} confidence bucket is historically mixed ({win_rate}% win rate)."}
+
+    def _confidence_bucket(self, confidence_score: float) -> tuple[float, float, str]:
+        if confidence_score >= 70:
+            return 70.0, 101.0, "A-grade"
+        if confidence_score >= 55:
+            return 55.0, 70.0, "B-grade"
+        if confidence_score >= 40:
+            return 40.0, 55.0, "C-grade"
+        return 0.0, 40.0, "Low-grade"
 
     def _grade(self, score: int) -> str:
         if score >= 85:

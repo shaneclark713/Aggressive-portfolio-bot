@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from statistics import median
 
 from telegram.ext import CommandHandler
 
@@ -27,6 +28,28 @@ async def _run_report(update, service, title: str) -> None:
         await update.message.reply_text(f"SPY/XSP scan failed: {type(exc).__name__}: {exc}")
 
 
+def _estimate_underlying_from_chain(rows: list[dict]) -> float:
+    strikes = []
+    weighted = []
+    for row in rows or []:
+        try:
+            strike = float(row.get("strike") or 0)
+        except Exception:
+            strike = 0.0
+        if strike <= 0:
+            continue
+        volume = float(row.get("volume") or 0)
+        open_interest = float(row.get("open_interest") or row.get("openInterest") or 0)
+        weight = max(1, int(min(50, volume + (open_interest * 0.05))))
+        strikes.append(strike)
+        weighted.extend([strike] * weight)
+    if weighted:
+        return float(median(weighted))
+    if strikes:
+        return float(median(strikes))
+    return 0.0
+
+
 def build_spy_0dte_handlers(app_services: dict, admin_chat_id: int):
     """Dedicated SPY/XSP desk commands kept outside the large legacy handler file."""
 
@@ -47,6 +70,40 @@ def build_spy_0dte_handlers(app_services: dict, admin_chat_id: int):
                 f"tradier_client={getattr(service, 'tradier_client', None) is not None if service else False}",
             ])
         )
+
+    async def spy_chain_gamma_command(update, context):
+        if not await _is_authorized(update, admin_chat_id):
+            return
+        service = _service()
+        if service is None:
+            await update.message.reply_text("SPY/XSP 0DTE service is not configured.")
+            return
+        try:
+            await update.message.reply_text("Loading Tradier-only SPY option-chain gamma...")
+            rows = await service._safe_chain_rows("SPY")
+            latest = _estimate_underlying_from_chain(rows)
+            dealer = service.dealer_gamma.summarize(latest, rows).as_dict()
+            lines = [
+                "<b>SPY Tradier-Only Chain Gamma</b>",
+                "",
+                "<i>Polygon intraday bars are not used for this command.</i>",
+                f"• Estimated Underlying Area: {service._price(latest)}",
+                f"• Dealer Regime: {dealer.get('dealer_regime', 'unknown')}",
+                f"• Exposure Score: {dealer.get('exposure_score', 0)}",
+                f"• Pin: {dealer.get('pin', 'n/a')}",
+                f"• Flip: {dealer.get('flip', 'n/a')}",
+                f"• Support: {dealer.get('support', 'n/a')}",
+                f"• Resistance: {dealer.get('resistance', 'n/a')}",
+                f"• Contracts Sampled: {len(rows)}",
+                "",
+                "<b>Dealer Notes</b>",
+            ]
+            notes = dealer.get("notes", []) or ["Tradier option-chain data unavailable or not enough chain data loaded."]
+            lines.extend(f"• {item}" for item in notes[:4])
+            await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+        except Exception as exc:
+            logger.exception("SPY/XSP chain gamma command failed: %s", exc)
+            await update.message.reply_text(f"SPY chain gamma failed: {type(exc).__name__}: {exc}")
 
     async def spy_0dte_command(update, context):
         if not await _is_authorized(update, admin_chat_id):
@@ -131,6 +188,7 @@ def build_spy_0dte_handlers(app_services: dict, admin_chat_id: int):
 
     return [
         CommandHandler("spy_health", spy_health_command),
+        CommandHandler("spy_chain_gamma", spy_chain_gamma_command),
         CommandHandler("spy_0dte", spy_0dte_command),
         CommandHandler("spy_midday", spy_midday_command),
         CommandHandler("spy_levels", spy_levels_command),

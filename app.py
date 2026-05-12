@@ -10,6 +10,7 @@ from database.db import connect_db, resolve_db_file
 from database.migrations import run_migrations
 from database.repositories import TradeRepository, AlertRepository, ExecutionLogRepository
 from database.settings_repository import SettingsRepository
+from database.spy_scan_repository import SpyScanJournalRepository
 from data.market_data import PolygonMarketDataClient
 from data.news_data import FinnhubNewsClient
 from data.econ_calendar import FinnhubEconomicCalendarClient
@@ -29,6 +30,7 @@ from services.premarket_service import PremarketService
 from services.midday_service import MiddayService
 from services.postmarket_service import PostmarketService
 from services.spy_0dte_service import Spy0DteService
+from services.spy_scan_journal_service import SpyScanJournalService
 from services.live_execution_service import LiveExecutionService
 from services.options_chain_ingest_service import OptionsChainIngestService
 from services.options_chain_service import OptionsChainService
@@ -110,6 +112,7 @@ async def main() -> None:
         alert_repo = AlertRepository(conn)
         execution_log_repo = ExecutionLogRepository(conn)
         settings_repo = SettingsRepository(conn)
+        spy_scan_journal_repo = SpyScanJournalRepository(conn)
 
         config_service = ConfigService(settings_repo, settings)
         config_service.reset_execution_mode_on_boot()
@@ -224,6 +227,7 @@ async def main() -> None:
             "alert_repo": alert_repo,
             "trade_repo": trade_repo,
             "execution_log_repo": execution_log_repo,
+            "spy_scan_journal_repo": spy_scan_journal_repo,
             "market_client": market,
             "news_client": news,
             "econ_client": econ,
@@ -267,7 +271,7 @@ async def main() -> None:
             config_service,
             alert_repo,
         )
-        spy_0dte = Spy0DteService(
+        spy_0dte_base = Spy0DteService(
             telegram_app,
             settings.telegram_admin_chat_id,
             market,
@@ -275,6 +279,7 @@ async def main() -> None:
             econ,
             tradier_client=tradier_market_data,
         )
+        spy_0dte = SpyScanJournalService(spy_0dte_base, spy_scan_journal_repo)
         app_services["spy_0dte_service"] = spy_0dte
         midday = MiddayService(
             telegram_app,

@@ -25,6 +25,7 @@ REQUIRED_MODULES = [
     "services.spy_scan_journal_service",
     "services.spy_setup_score_service",
     "services.startup_recovery_service",
+    "telegram_bot.admin_handlers",
     "telegram_bot.analytics_handlers",
     "telegram_bot.bot",
     "telegram_bot.execution_handlers",

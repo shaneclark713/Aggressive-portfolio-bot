@@ -114,38 +114,41 @@ def _check_dealer_gamma() -> list[str]:
     return failures
 
 
-def _check_phase2_analytics() -> list[str]:
-    from database.db import init_db
+def _build_spy_repo(conn):
     from database.spy_scan_repository import SpyScanJournalRepository
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS spy_scan_journal (
+            scan_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scan_type TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            symbol TEXT NOT NULL DEFAULT 'SPY',
+            latest REAL,
+            structure_bias TEXT,
+            structure_score INTEGER,
+            confidence_grade TEXT,
+            confidence_score INTEGER,
+            trend_probability INTEGER,
+            mean_reversion_probability INTEGER,
+            dealer_regime TEXT,
+            dealer_exposure_score INTEGER,
+            payload TEXT NOT NULL,
+            outcome TEXT,
+            outcome_notes TEXT,
+            outcome_marked_at TEXT
+        )
+    """)
+    return SpyScanJournalRepository(conn)
+
+
+def _check_phase2_analytics() -> list[str]:
     from services.spy_setup_score_service import SpySetupScoreService
 
     failures: list[str] = []
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     try:
-        init_db(":memory:")
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS spy_scan_journal (
-                scan_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                scan_type TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                symbol TEXT NOT NULL DEFAULT 'SPY',
-                latest REAL,
-                structure_bias TEXT,
-                structure_score INTEGER,
-                confidence_grade TEXT,
-                confidence_score INTEGER,
-                trend_probability INTEGER,
-                mean_reversion_probability INTEGER,
-                dealer_regime TEXT,
-                dealer_exposure_score INTEGER,
-                payload TEXT NOT NULL,
-                outcome TEXT,
-                outcome_notes TEXT,
-                outcome_marked_at TEXT
-            )
-        """)
-        repo = SpyScanJournalRepository(conn)
+        repo = _build_spy_repo(conn)
         scan_id = repo.record_scan(
             "smoke",
             {
@@ -270,7 +273,6 @@ def _check_phase4_telegram_registry() -> list[str]:
     if parse_decimal_or_percent("5%") != 0.05 or parse_decimal_or_percent("5") != 0.05:
         failures.append("ui_helpers.parse_decimal_or_percent failed expected percentage parsing")
 
-    # Builder existence check only. Full command construction requires live app services.
     for builder_name, builder in {
         "admin": build_admin_handlers,
         "analytics": build_analytics_handlers,
@@ -279,6 +281,49 @@ def _check_phase4_telegram_registry() -> list[str]:
     }.items():
         if not callable(builder):
             failures.append(f"{builder_name} handler builder is not callable")
+    return failures
+
+
+def _check_phase5_spy_history() -> list[str]:
+    from telegram_bot.handler_registry import command_names, summarize_handlers
+    from telegram_bot.spy_0dte_handlers import build_spy_0dte_handlers
+
+    failures: list[str] = []
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    try:
+        repo = _build_spy_repo(conn)
+        scan_id = repo.record_scan(
+            "phase5_smoke",
+            {
+                "timestamp": "2026-01-02T09:30:00",
+                "symbol": "SPY",
+                "latest": 501.25,
+                "structure": {"bias": "balanced / tactical", "score": 44},
+                "confidence": {"grade": "B", "score": 61, "trend_probability": 55, "mean_reversion_probability": 45},
+                "dealer_gamma": {"dealer_regime": "pin risk", "exposure_score": 35},
+            },
+        )
+        repo.mark_outcome(scan_id, "neutral", "phase 5 smoke")
+        recent = repo.summarize_recent(limit=5)
+        if recent.get("count") != 1 or not recent.get("rows"):
+            failures.append("SPY history summarize_recent did not return saved scan")
+        row = recent["rows"][0]
+        for key in ("scan_id", "scan_type", "structure_bias", "confidence_grade", "confidence_score", "outcome"):
+            if key not in row:
+                failures.append(f"SPY history row missing {key}")
+        handlers = build_spy_0dte_handlers({"spy_scan_journal_repo": repo}, admin_chat_id=1)
+        commands = summarize_handlers(handlers).get("commands", [])
+        for command in ("spy_history", "spy_mark_win", "spy_mark_loss", "spy_accuracy", "best_regimes"):
+            if command not in commands:
+                failures.append(f"SPY handler registry missing /{command}")
+        for handler in handlers:
+            if "spy_history" in command_names(handler):
+                break
+        else:
+            failures.append("/spy_history handler not found")
+    finally:
+        conn.close()
     return failures
 
 
@@ -292,6 +337,7 @@ def main() -> int:
         "phase2_analytics": _check_phase2_analytics,
         "phase3_execution_hardening": _check_phase3_execution_hardening,
         "phase4_telegram_registry": _check_phase4_telegram_registry,
+        "phase5_spy_history": _check_phase5_spy_history,
     }
     failures: list[str] = []
     for name, check in checks.items():

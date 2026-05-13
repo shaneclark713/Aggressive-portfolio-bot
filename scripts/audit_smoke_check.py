@@ -26,7 +26,9 @@ REQUIRED_MODULES = [
     "services.spy_setup_score_service",
     "services.startup_recovery_service",
     "telegram_bot.bot",
+    "telegram_bot.handler_registry",
     "telegram_bot.handlers",
+    "telegram_bot.runtime_handlers",
     "telegram_bot.spy_0dte_handlers",
 ]
 
@@ -232,6 +234,28 @@ def _check_phase3_execution_hardening() -> list[str]:
     return failures
 
 
+def _check_phase4_telegram_registry() -> list[str]:
+    from telegram.ext import CommandHandler
+    from telegram_bot.handler_registry import command_names, dedupe_handlers, summarize_handlers
+
+    async def noop(update, context):
+        return None
+
+    failures: list[str] = []
+    one = CommandHandler("duplicate", noop)
+    two = CommandHandler("duplicate", noop)
+    unique = CommandHandler("unique", noop)
+    handlers = dedupe_handlers([[one, two], [unique]])
+    summary = summarize_handlers(handlers)
+    if len(handlers) != 2:
+        failures.append("handler registry did not dedupe duplicate commands")
+    if command_names(one) != ["duplicate"]:
+        failures.append("handler registry did not read command names")
+    if "duplicate" not in summary.get("commands", []) or "unique" not in summary.get("commands", []):
+        failures.append("handler registry summary missing expected commands")
+    return failures
+
+
 def main() -> int:
     checks = {
         "imports": _check_imports,
@@ -241,6 +265,7 @@ def main() -> int:
         "dealer_gamma": _check_dealer_gamma,
         "phase2_analytics": _check_phase2_analytics,
         "phase3_execution_hardening": _check_phase3_execution_hardening,
+        "phase4_telegram_registry": _check_phase4_telegram_registry,
     }
     failures: list[str] = []
     for name, check in checks.items():

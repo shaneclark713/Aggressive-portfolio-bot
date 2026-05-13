@@ -5,6 +5,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from execution.ladder_manager import LadderManager
+from services.execution_guard_service import ExecutionGuardService
 from services.options_order_service import OptionsOrderService
 
 
@@ -14,7 +15,7 @@ class LiveExecutionService:
         self.execution_router = execution_router
         self.trailing_stop_service = trailing_stop_service
         self.risk_service = risk_service
-        self.execution_guard_service = execution_guard_service
+        self.execution_guard_service = execution_guard_service or ExecutionGuardService()
         self.ladder_manager = LadderManager()
         self.options_order_service = OptionsOrderService()
 

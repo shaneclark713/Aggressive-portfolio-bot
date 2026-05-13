@@ -131,24 +131,59 @@ class SpyScanJournalRepository:
             "rows": rows,
         }
 
-    def regime_summary(self, limit: int = 250) -> list[dict[str, Any]]:
-        rows = self.recent_scans(limit=limit, only_marked=True)
+    def _group_summary(self, rows: list[dict[str, Any]], field: str, label_key: str) -> list[dict[str, Any]]:
         buckets: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for row in rows:
-            regime = row.get("dealer_regime") or "unknown"
-            buckets[str(regime)].append(row)
+            label = str(row.get(field) or "unknown")
+            buckets[label].append(row)
         summary: list[dict[str, Any]] = []
-        for regime, items in buckets.items():
+        for label, items in buckets.items():
+            marked = [row for row in items if row.get("outcome")]
             scored = [row for row in items if row.get("outcome") in {"win", "loss"}]
             wins = [row for row in scored if row.get("outcome") == "win"]
+            losses = [row for row in scored if row.get("outcome") == "loss"]
+            neutrals = [row for row in marked if row.get("outcome") == "neutral"]
+            skips = [row for row in marked if row.get("outcome") == "skip"]
             win_rate = round((len(wins) / len(scored)) * 100.0, 2) if scored else 0.0
             avg_conf = round(sum(float(row.get("confidence_score") or 0) for row in scored) / max(len(scored), 1), 2) if scored else 0.0
+            avg_structure = round(sum(float(row.get("structure_score") or 0) for row in scored) / max(len(scored), 1), 2) if scored else 0.0
+            avg_trend = round(sum(float(row.get("trend_probability") or 0) for row in scored) / max(len(scored), 1), 2) if scored else 0.0
             summary.append({
-                "dealer_regime": regime,
-                "marked_count": len(items),
+                label_key: label,
+                "marked_count": len(marked),
                 "scored_count": len(scored),
                 "wins": len(wins),
+                "losses": len(losses),
+                "neutral": len(neutrals),
+                "skip": len(skips),
                 "win_rate": win_rate,
                 "avg_confidence": avg_conf,
+                "avg_structure_score": avg_structure,
+                "avg_trend_probability": avg_trend,
             })
-        return sorted(summary, key=lambda row: (row["scored_count"], row["win_rate"]), reverse=True)
+        return sorted(summary, key=lambda row: (row["scored_count"], row["win_rate"], row["avg_confidence"]), reverse=True)
+
+    def regime_summary(self, limit: int = 250) -> list[dict[str, Any]]:
+        rows = self.recent_scans(limit=limit, only_marked=True)
+        return [
+            {**row, "dealer_regime": row.pop("dealer_regime_bucket", row.get("dealer_regime", "unknown"))}
+            for row in self._group_summary(rows, "dealer_regime", "dealer_regime_bucket")
+        ]
+
+    def setup_performance_summary(self, limit: int = 250) -> dict[str, Any]:
+        rows = self.recent_scans(limit=limit, only_marked=True)
+        scored = [row for row in rows if row.get("outcome") in {"win", "loss"}]
+        wins = [row for row in scored if row.get("outcome") == "win"]
+        overall_win_rate = round((len(wins) / len(scored)) * 100.0, 2) if scored else 0.0
+        return {
+            "limit": int(limit),
+            "marked_count": len(rows),
+            "scored_count": len(scored),
+            "wins": len(wins),
+            "losses": len(scored) - len(wins),
+            "win_rate": overall_win_rate,
+            "by_scan_type": self._group_summary(rows, "scan_type", "scan_type"),
+            "by_structure_bias": self._group_summary(rows, "structure_bias", "structure_bias"),
+            "by_confidence_grade": self._group_summary(rows, "confidence_grade", "confidence_grade"),
+            "by_dealer_regime": self._group_summary(rows, "dealer_regime", "dealer_regime"),
+        }

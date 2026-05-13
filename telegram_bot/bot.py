@@ -6,6 +6,7 @@ from telegram.ext import ApplicationBuilder
 
 from .handler_registry import dedupe_handlers, summarize_handlers
 from .handlers import build_handlers
+from .runtime_handlers import build_runtime_handlers
 from .spy_0dte_handlers import build_spy_0dte_handlers
 
 logger = logging.getLogger("aggressive_portfolio_bot.telegram.bot")
@@ -14,6 +15,7 @@ logger = logging.getLogger("aggressive_portfolio_bot.telegram.bot")
 def build_telegram_app(token: str, app_services, config_service, admin_chat_id: int):
     app = ApplicationBuilder().token(token).build()
     handlers = dedupe_handlers([
+        build_runtime_handlers(app_services, admin_chat_id),
         build_spy_0dte_handlers(app_services, admin_chat_id),
         build_handlers(app_services, config_service, admin_chat_id),
     ])

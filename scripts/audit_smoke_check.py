@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import sqlite3
 import sys
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,10 +18,13 @@ REQUIRED_MODULES = [
     "core.scheduler",
     "database.spy_scan_repository",
     "services.dealer_gamma_service",
+    "services.execution_guard_service",
     "services.position_sync_service",
+    "services.risk_service",
     "services.spy_0dte_service",
     "services.spy_scan_journal_service",
     "services.spy_setup_score_service",
+    "services.startup_recovery_service",
     "telegram_bot.bot",
     "telegram_bot.handlers",
     "telegram_bot.spy_0dte_handlers",
@@ -114,8 +118,6 @@ def _check_phase2_analytics() -> list[str]:
     conn.row_factory = sqlite3.Row
     try:
         init_db(":memory:")
-        # init_db opens its own connection for file paths. For the in-memory smoke test,
-        # create only the table needed by the repository so the repo methods are validated.
         conn.execute("""
             CREATE TABLE IF NOT EXISTS spy_scan_journal (
                 scan_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -170,6 +172,66 @@ def _check_phase2_analytics() -> list[str]:
     return failures
 
 
+class _FakeSettingsRepo:
+    def __init__(self, profile: dict):
+        self.profile = profile
+
+    def normalize_execution_scope(self, scope: str) -> str:
+        return scope
+
+    def get_execution_settings(self, scope: str) -> dict:
+        return dict(self.profile)
+
+
+class _FakeTradeRepo:
+    def get_consecutive_loss_count(self) -> int:
+        return 2
+
+    def get_recent_closed_trades(self, limit: int = 500):
+        return [
+            {"pnl": -150, "exit_time": datetime.now().isoformat()},
+            {"pnl": -75, "exit_time": datetime.now().isoformat()},
+        ]
+
+
+def _check_phase3_execution_hardening() -> list[str]:
+    from services.execution_guard_service import ExecutionGuardService
+    from services.risk_service import RiskService
+
+    failures: list[str] = []
+    guard = ExecutionGuardService(default_cooldown_seconds=60)
+    insufficient = guard.classify_failure("insufficient buying power")
+    if insufficient.get("failure_type") != "insufficient_funds" or insufficient.get("is_retryable"):
+        failures.append("ExecutionGuardService failed insufficient funds classification")
+    transient = guard.classify_failure("timeout 503 connection error")
+    if transient.get("failure_type") != "transient_api" or not transient.get("is_retryable"):
+        failures.append("ExecutionGuardService failed transient API classification")
+    key = guard.build_key({"symbol": "SPY", "side": "buy", "qty": 1, "type": "option"}, namespace="smoke")
+    with guard.guarded(key, payload={"symbol": "SPY"}) as (allowed, reason):
+        if not allowed or reason:
+            failures.append("ExecutionGuardService blocked first guarded execution unexpectedly")
+    allowed_after, reason_after = guard.check(key, cooldown_seconds=60)
+    if allowed_after or not reason_after:
+        failures.append("ExecutionGuardService did not enforce duplicate cooldown")
+
+    risk = RiskService(
+        _FakeSettingsRepo({
+            "max_consecutive_losses": 2,
+            "max_daily_loss": 100,
+            "market_hours_only": False,
+        }),
+        _FakeTradeRepo(),
+    )
+    allowed, reason = risk.can_open_new_position(trade_style="day_trade")
+    if allowed or not reason:
+        failures.append("RiskService did not block after max loss/daily loss threshold")
+    status = risk.status(trade_style="day_trade")
+    for key_name in ("can_open_new_position", "blocked_reason", "daily_realized_pnl", "max_daily_loss"):
+        if key_name not in status:
+            failures.append(f"RiskService status missing {key_name}")
+    return failures
+
+
 def main() -> int:
     checks = {
         "imports": _check_imports,
@@ -178,6 +240,7 @@ def main() -> int:
         "demo_fallback_guard": _check_demo_fallback_guard,
         "dealer_gamma": _check_dealer_gamma,
         "phase2_analytics": _check_phase2_analytics,
+        "phase3_execution_hardening": _check_phase3_execution_hardening,
     }
     failures: list[str] = []
     for name, check in checks.items():

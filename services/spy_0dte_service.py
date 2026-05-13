@@ -14,6 +14,13 @@ from services.dealer_gamma_service import DealerGammaService
 class Spy0DteService:
     """Analysis-only SPY/XSP market-structure report service."""
 
+    US_EVENT_COUNTRIES = {"US", "USA", "UNITED STATES"}
+    US_EVENT_KEYWORDS = (
+        "ppi", "cpi", "pce", "fed", "fomc", "powell", "claims", "payroll", "nfp",
+        "unemployment", "consumer confidence", "ism", "pmi", "retail sales", "auction",
+        "treasury", "crude", "oil", "eia", "inventory", "inventories", "gdp",
+    )
+
     def __init__(self, telegram_app, chat_id: int, market_client, news_client, econ_client, tradier_client=None):
         self.telegram_app = telegram_app
         self.chat_id = chat_id
@@ -164,18 +171,36 @@ class Spy0DteService:
             return "compressed / pinned"
         return "normal intraday expansion"
 
+    def _market_relevant_events(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        relevant: list[dict[str, Any]] = []
+        for event in events or []:
+            country = str(event.get("country") or event.get("country_code") or "").strip().upper()
+            title = " ".join(str(event.get(key) or "") for key in ("event", "title", "name", "description")).lower()
+            if country in self.US_EVENT_COUNTRIES or any(keyword in title for keyword in self.US_EVENT_KEYWORDS):
+                relevant.append(event)
+        return relevant
+
+    async def _safe_latest_price_any(self, symbols: list[str]) -> tuple[float, str]:
+        for symbol in symbols:
+            try:
+                value = self._safe_float(await self.market_client.get_latest_price(symbol))
+                if value > 0:
+                    return value, symbol
+            except Exception:
+                continue
+        return 0.0, ""
+
     def _cross_confirmation(self, spy_latest: float, spy_prev_close: float, spy_structure: dict[str, Any], xsp_latest: float, spx_latest: float) -> dict[str, Any]:
         spy_change = ((spy_latest - spy_prev_close) / spy_prev_close * 100.0) if spy_latest and spy_prev_close else 0.0
         notes: list[str] = []
         confirmations = 0
         if xsp_latest:
-            xsp_proxy = xsp_latest * 10
-            spread_pct = ((xsp_proxy - spy_latest) / spy_latest * 100.0) if spy_latest else 0.0
+            spread_pct = ((xsp_latest - spy_latest) / spy_latest * 100.0) if spy_latest else 0.0
             if abs(spread_pct) <= 0.35:
                 confirmations += 1
-                notes.append("XSP proxy is aligned with SPY price structure.")
+                notes.append("XSP is aligned with SPY price structure.")
             else:
-                notes.append(f"XSP proxy divergence detected ({spread_pct:.2f}%).")
+                notes.append(f"XSP divergence detected ({spread_pct:.2f}%).")
         else:
             notes.append("XSP live price unavailable; using SPY primary structure.")
         if spx_latest:
@@ -237,7 +262,7 @@ class Spy0DteService:
             notes.append("RSI is extreme; wait for stabilization or pullback confirmation.")
         if int(payload.get("high_impact_count", 0) or 0) > 0:
             score -= 5
-            notes.append("High-impact economic events increase headline risk.")
+            notes.append("High-impact U.S./market events increase headline risk.")
         score = max(0, min(100, score))
         if score >= 70:
             grade = "A"
@@ -304,12 +329,15 @@ class Spy0DteService:
         rsi_daily = self._rsi(daily_df["close"]) if not daily_df.empty else 50.0
         vwap = self._vwap(regular if not regular.empty else active)
         headlines = await self._safe_headlines()
-        events = await self._safe_events()
+        raw_events = await self._safe_events()
+        events = self._market_relevant_events(raw_events)
         chain_rows = await self._safe_chain_rows("SPY")
         dealer_gamma = self.dealer_gamma.summarize(latest, chain_rows).as_dict()
         structure = self._structure(latest, vwap, rsi_5m, regular, opening_range)
-        xsp_latest = await self._safe_latest_price("I:XSP")
-        spx_latest = await self._safe_latest_price("I:SPX")
+        xsp_latest, xsp_symbol = await self._safe_latest_price_any(["XSP", "I:XSP", "CBOE:XSP"])
+        spx_latest, spx_symbol = await self._safe_latest_price_any(["I:SPX", "SPX", "CBOE:SPX"])
+        summarized_events = self.econ_client.summarize_events(events, limit=5) if hasattr(self.econ_client, "summarize_events") else []
+        high_impact_count = len([e for e in events if str(e.get("impact_label") or "").lower() == "high"])
         payload = {
             "timestamp": datetime.now(self.market_tz).isoformat(timespec="seconds"),
             "latest": latest,
@@ -319,6 +347,8 @@ class Spy0DteService:
             "rsi_daily": rsi_daily,
             "xsp_latest": xsp_latest,
             "spx_latest": spx_latest,
+            "xsp_symbol_used": xsp_symbol,
+            "spx_symbol_used": spx_symbol,
             "premarket_high": self._safe_float(premarket["high"].max()) if not premarket.empty else 0.0,
             "premarket_low": self._safe_float(premarket["low"].min()) if not premarket.empty else 0.0,
             "opening_range_high": self._safe_float(opening_range["high"].max()) if not opening_range.empty else 0.0,
@@ -330,8 +360,10 @@ class Spy0DteService:
             "sentiment": analyze_sentiment(headlines),
             "headline_count": len(headlines),
             "top_headlines": self.news_client.summarize_headlines(headlines, limit=4) if hasattr(self.news_client, "summarize_headlines") else [],
-            "events": self.econ_client.summarize_events(events, limit=5) if hasattr(self.econ_client, "summarize_events") else [],
-            "high_impact_count": len([e for e in events if e.get("impact_label") == "high"]),
+            "events": summarized_events,
+            "raw_event_count": len(raw_events),
+            "market_event_count": len(events),
+            "high_impact_count": high_impact_count,
             "chain_contracts": len(chain_rows),
             "zones": dealer_gamma,
             "dealer_gamma": dealer_gamma,
@@ -361,7 +393,7 @@ class Spy0DteService:
             f"• Cross Confirmation: {escape(str(cross.get('state', 'n/a')))} | SPY Change: {escape(str(cross.get('spy_change_pct', 0.0)))}%",
             "",
             "<b>PRICE STRUCTURE</b>",
-            f"• SPY Last: {self._price(payload.get('latest'))} | XSP: {self._price(payload.get('xsp_latest'))} | SPX: {self._price(payload.get('spx_latest'))}",
+            f"• SPY Last: {self._price(payload.get('latest'))} | XSP: {self._price(payload.get('xsp_latest'))} ({escape(str(payload.get('xsp_symbol_used') or 'n/a'))}) | SPX: {self._price(payload.get('spx_latest'))} ({escape(str(payload.get('spx_symbol_used') or 'n/a'))})",
             f"• VWAP: {self._price(payload.get('vwap'))}",
             f"• Premarket High/Low: {self._price(payload.get('premarket_high'))} / {self._price(payload.get('premarket_low'))}",
             f"• OR Ceiling/Floor: {self._price(payload.get('opening_range_high'))} / {self._price(payload.get('opening_range_low'))}",
@@ -392,7 +424,7 @@ class Spy0DteService:
             "",
             "<b>CATALYSTS / SENTIMENT</b>",
             f"• Sentiment: {escape(str(payload.get('sentiment', {}).get('sentiment', 'neutral')))} ({payload.get('sentiment', {}).get('score', 0)})",
-            f"• Headlines: {payload.get('headline_count')} | High-Impact Events: {payload.get('high_impact_count')}",
+            f"• Headlines: {payload.get('headline_count')} | Market Events: {payload.get('market_event_count', 0)} / Raw Events: {payload.get('raw_event_count', 0)} | High-Impact Market Events: {payload.get('high_impact_count')}",
         ])
         for event in payload.get("events", [])[:4]:
             lines.append(f"• {escape(str(event))}")

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import importlib
+import sqlite3
 import sys
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -14,12 +16,24 @@ REQUIRED_MODULES = [
     "brokers.execution_router",
     "config.schedules",
     "core.scheduler",
+    "database.spy_scan_repository",
     "services.dealer_gamma_service",
+    "services.execution_guard_service",
     "services.position_sync_service",
+    "services.risk_service",
     "services.spy_0dte_service",
+    "services.spy_scan_journal_service",
+    "services.spy_setup_score_service",
+    "services.startup_recovery_service",
+    "telegram_bot.admin_handlers",
+    "telegram_bot.analytics_handlers",
     "telegram_bot.bot",
+    "telegram_bot.execution_handlers",
+    "telegram_bot.handler_registry",
     "telegram_bot.handlers",
+    "telegram_bot.runtime_handlers",
     "telegram_bot.spy_0dte_handlers",
+    "telegram_bot.ui_helpers",
 ]
 
 
@@ -100,6 +114,219 @@ def _check_dealer_gamma() -> list[str]:
     return failures
 
 
+def _build_spy_repo(conn):
+    from database.spy_scan_repository import SpyScanJournalRepository
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS spy_scan_journal (
+            scan_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scan_type TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            symbol TEXT NOT NULL DEFAULT 'SPY',
+            latest REAL,
+            structure_bias TEXT,
+            structure_score INTEGER,
+            confidence_grade TEXT,
+            confidence_score INTEGER,
+            trend_probability INTEGER,
+            mean_reversion_probability INTEGER,
+            dealer_regime TEXT,
+            dealer_exposure_score INTEGER,
+            payload TEXT NOT NULL,
+            outcome TEXT,
+            outcome_notes TEXT,
+            outcome_marked_at TEXT
+        )
+    """)
+    return SpyScanJournalRepository(conn)
+
+
+def _check_phase2_analytics() -> list[str]:
+    from services.spy_setup_score_service import SpySetupScoreService
+
+    failures: list[str] = []
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    try:
+        repo = _build_spy_repo(conn)
+        scan_id = repo.record_scan(
+            "smoke",
+            {
+                "timestamp": "2026-01-01T09:30:00",
+                "latest": 500.0,
+                "structure": {"bias": "upside structure", "score": 50},
+                "confidence": {"grade": "A", "score": 72, "trend_probability": 70, "mean_reversion_probability": 30},
+                "dealer_gamma": {"dealer_regime": "hedge pressure", "exposure_score": 45},
+            },
+        )
+        repo.mark_outcome(scan_id, "win", "smoke")
+        accuracy = repo.accuracy_summary(limit=10)
+        if accuracy.get("wins") != 1:
+            failures.append("SPY scan repository did not record win outcome")
+        scorer = SpySetupScoreService(repo)
+        score = scorer.score_payload(
+            {
+                "structure": {"score": 50},
+                "confidence": {"score": 72, "trend_probability": 70, "mean_reversion_probability": 30},
+                "dealer_gamma": {"dealer_regime": "hedge pressure", "exposure_score": 45},
+                "high_impact_count": 0,
+                "data_quality": {},
+            }
+        )
+        for key in ("score", "grade", "action", "reasons", "warnings", "calibration"):
+            if key not in score:
+                failures.append(f"SPY setup score missing {key}")
+    finally:
+        conn.close()
+    return failures
+
+
+class _FakeSettingsRepo:
+    def __init__(self, profile: dict):
+        self.profile = profile
+
+    def normalize_execution_scope(self, scope: str) -> str:
+        return scope
+
+    def get_execution_settings(self, scope: str) -> dict:
+        return dict(self.profile)
+
+
+class _FakeTradeRepo:
+    def get_consecutive_loss_count(self) -> int:
+        return 2
+
+    def get_recent_closed_trades(self, limit: int = 500):
+        return [
+            {"pnl": -150, "exit_time": datetime.now().isoformat()},
+            {"pnl": -75, "exit_time": datetime.now().isoformat()},
+        ]
+
+
+def _check_phase3_execution_hardening() -> list[str]:
+    from services.execution_guard_service import ExecutionGuardService
+    from services.risk_service import RiskService
+
+    failures: list[str] = []
+    guard = ExecutionGuardService(default_cooldown_seconds=60)
+    insufficient = guard.classify_failure("insufficient buying power")
+    if insufficient.get("failure_type") != "insufficient_funds" or insufficient.get("is_retryable"):
+        failures.append("ExecutionGuardService failed insufficient funds classification")
+    transient = guard.classify_failure("timeout 503 connection error")
+    if transient.get("failure_type") != "transient_api" or not transient.get("is_retryable"):
+        failures.append("ExecutionGuardService failed transient API classification")
+    key = guard.build_key({"symbol": "SPY", "side": "buy", "qty": 1, "type": "option"}, namespace="smoke")
+    with guard.guarded(key, payload={"symbol": "SPY"}) as (allowed, reason):
+        if not allowed or reason:
+            failures.append("ExecutionGuardService blocked first guarded execution unexpectedly")
+    allowed_after, reason_after = guard.check(key, cooldown_seconds=60)
+    if allowed_after or not reason_after:
+        failures.append("ExecutionGuardService did not enforce duplicate cooldown")
+
+    risk = RiskService(
+        _FakeSettingsRepo({
+            "max_consecutive_losses": 2,
+            "max_daily_loss": 100,
+            "market_hours_only": False,
+        }),
+        _FakeTradeRepo(),
+    )
+    allowed, reason = risk.can_open_new_position(trade_style="day_trade")
+    if allowed or not reason:
+        failures.append("RiskService did not block after max loss/daily loss threshold")
+    status = risk.status(trade_style="day_trade")
+    for key_name in ("can_open_new_position", "blocked_reason", "daily_realized_pnl", "max_daily_loss"):
+        if key_name not in status:
+            failures.append(f"RiskService status missing {key_name}")
+    return failures
+
+
+def _check_phase4_telegram_registry() -> list[str]:
+    from telegram.ext import CommandHandler
+    from telegram_bot.admin_handlers import build_admin_handlers
+    from telegram_bot.analytics_handlers import build_analytics_handlers
+    from telegram_bot.execution_handlers import build_execution_handlers
+    from telegram_bot.handler_registry import command_names, dedupe_handlers, summarize_handlers
+    from telegram_bot.runtime_handlers import build_runtime_handlers
+    from telegram_bot.ui_helpers import clean_number, parse_bool, parse_decimal_or_percent
+
+    async def noop(update, context):
+        return None
+
+    failures: list[str] = []
+    one = CommandHandler("duplicate", noop)
+    two = CommandHandler("duplicate", noop)
+    unique = CommandHandler("unique", noop)
+    handlers = dedupe_handlers([[one, two], [unique]])
+    summary = summarize_handlers(handlers)
+    if len(handlers) != 2:
+        failures.append("handler registry did not dedupe duplicate commands")
+    if command_names(one) != ["duplicate"]:
+        failures.append("handler registry did not read command names")
+    if "duplicate" not in summary.get("commands", []) or "unique" not in summary.get("commands", []):
+        failures.append("handler registry summary missing expected commands")
+
+    if clean_number("1,250") != "1250":
+        failures.append("ui_helpers.clean_number failed comma normalization")
+    if parse_bool("enabled") is not True or parse_bool("off") is not False:
+        failures.append("ui_helpers.parse_bool failed expected values")
+    if parse_decimal_or_percent("5%") != 0.05 or parse_decimal_or_percent("5") != 0.05:
+        failures.append("ui_helpers.parse_decimal_or_percent failed expected percentage parsing")
+
+    for builder_name, builder in {
+        "admin": build_admin_handlers,
+        "analytics": build_analytics_handlers,
+        "execution": build_execution_handlers,
+        "runtime": build_runtime_handlers,
+    }.items():
+        if not callable(builder):
+            failures.append(f"{builder_name} handler builder is not callable")
+    return failures
+
+
+def _check_phase5_spy_history() -> list[str]:
+    from telegram_bot.handler_registry import command_names, summarize_handlers
+    from telegram_bot.spy_0dte_handlers import build_spy_0dte_handlers
+
+    failures: list[str] = []
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    try:
+        repo = _build_spy_repo(conn)
+        scan_id = repo.record_scan(
+            "phase5_smoke",
+            {
+                "timestamp": "2026-01-02T09:30:00",
+                "symbol": "SPY",
+                "latest": 501.25,
+                "structure": {"bias": "balanced / tactical", "score": 44},
+                "confidence": {"grade": "B", "score": 61, "trend_probability": 55, "mean_reversion_probability": 45},
+                "dealer_gamma": {"dealer_regime": "pin risk", "exposure_score": 35},
+            },
+        )
+        repo.mark_outcome(scan_id, "neutral", "phase 5 smoke")
+        recent = repo.summarize_recent(limit=5)
+        if recent.get("count") != 1 or not recent.get("rows"):
+            failures.append("SPY history summarize_recent did not return saved scan")
+        row = recent["rows"][0]
+        for key in ("scan_id", "scan_type", "structure_bias", "confidence_grade", "confidence_score", "outcome"):
+            if key not in row:
+                failures.append(f"SPY history row missing {key}")
+        handlers = build_spy_0dte_handlers({"spy_scan_journal_repo": repo}, admin_chat_id=1)
+        commands = summarize_handlers(handlers).get("commands", [])
+        for command in ("spy_history", "spy_mark_win", "spy_mark_loss", "spy_accuracy", "best_regimes"):
+            if command not in commands:
+                failures.append(f"SPY handler registry missing /{command}")
+        for handler in handlers:
+            if "spy_history" in command_names(handler):
+                break
+        else:
+            failures.append("/spy_history handler not found")
+    finally:
+        conn.close()
+    return failures
+
+
 def main() -> int:
     checks = {
         "imports": _check_imports,
@@ -107,6 +334,10 @@ def main() -> int:
         "order_request": _check_order_request,
         "demo_fallback_guard": _check_demo_fallback_guard,
         "dealer_gamma": _check_dealer_gamma,
+        "phase2_analytics": _check_phase2_analytics,
+        "phase3_execution_hardening": _check_phase3_execution_hardening,
+        "phase4_telegram_registry": _check_phase4_telegram_registry,
+        "phase5_spy_history": _check_phase5_spy_history,
     }
     failures: list[str] = []
     for name, check in checks.items():

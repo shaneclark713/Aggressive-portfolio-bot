@@ -187,3 +187,68 @@ class SpyScanJournalRepository:
             "by_confidence_grade": self._group_summary(rows, "confidence_grade", "confidence_grade"),
             "by_dealer_regime": self._group_summary(rows, "dealer_regime", "dealer_regime"),
         }
+
+    def confidence_calibration_summary(self, limit: int = 500) -> dict[str, Any]:
+        rows = self.recent_scans(limit=limit, only_marked=True)
+        scored = [row for row in rows if row.get("outcome") in {"win", "loss"}]
+        buckets = [
+            ("A+ / elite", 85, 101),
+            ("A / high", 70, 85),
+            ("B / tradable", 55, 70),
+            ("C / caution", 40, 55),
+            ("D / avoid", 0, 40),
+        ]
+        bucket_rows: list[dict[str, Any]] = []
+        for label, low, high in buckets:
+            items = []
+            for row in scored:
+                try:
+                    score = float(row.get("confidence_score") or 0)
+                except Exception:
+                    score = 0.0
+                if low <= score < high:
+                    items.append(row)
+            wins = [row for row in items if row.get("outcome") == "win"]
+            losses = [row for row in items if row.get("outcome") == "loss"]
+            avg_conf = round(sum(float(row.get("confidence_score") or 0) for row in items) / max(len(items), 1), 2) if items else 0.0
+            actual_win_rate = round((len(wins) / len(items)) * 100.0, 2) if items else 0.0
+            calibration_gap = round(actual_win_rate - avg_conf, 2) if items else 0.0
+            bucket_rows.append({
+                "bucket": label,
+                "range_low": low,
+                "range_high": high - 1,
+                "scored_count": len(items),
+                "wins": len(wins),
+                "losses": len(losses),
+                "avg_confidence": avg_conf,
+                "actual_win_rate": actual_win_rate,
+                "calibration_gap": calibration_gap,
+                "status": self._calibration_status(calibration_gap, len(items)),
+            })
+        high_confidence = [row for row in scored if float(row.get("confidence_score") or 0) >= 70]
+        high_conf_losses = [row for row in high_confidence if row.get("outcome") == "loss"]
+        low_confidence = [row for row in scored if float(row.get("confidence_score") or 0) < 55]
+        low_conf_wins = [row for row in low_confidence if row.get("outcome") == "win"]
+        wins = [row for row in scored if row.get("outcome") == "win"]
+        overall_win_rate = round((len(wins) / len(scored)) * 100.0, 2) if scored else 0.0
+        avg_confidence = round(sum(float(row.get("confidence_score") or 0) for row in scored) / max(len(scored), 1), 2) if scored else 0.0
+        return {
+            "limit": int(limit),
+            "marked_count": len(rows),
+            "scored_count": len(scored),
+            "overall_win_rate": overall_win_rate,
+            "avg_confidence": avg_confidence,
+            "overall_gap": round(overall_win_rate - avg_confidence, 2) if scored else 0.0,
+            "buckets": bucket_rows,
+            "high_confidence_losses": high_conf_losses[:10],
+            "low_confidence_wins": low_conf_wins[:10],
+        }
+
+    def _calibration_status(self, gap: float, sample_size: int) -> str:
+        if sample_size < 5:
+            return "needs more samples"
+        if gap <= -15:
+            return "overconfident"
+        if gap >= 15:
+            return "underconfident"
+        return "well calibrated"

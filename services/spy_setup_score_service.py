@@ -107,6 +107,98 @@ class SpySetupScoreService:
             "calibration": calibration or {},
         }
 
+    def a_plus_filter(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Strict A+ eligibility gate for manual 0DTE execution watchlists.
+
+        This is intentionally stricter than score_payload(). It does not place trades;
+        it only decides whether a scan is clean enough to deserve A+ attention.
+        """
+        score = self.score_payload(payload)
+        structure = payload.get("structure", {}) or {}
+        confidence = payload.get("confidence", {}) or {}
+        dealer = payload.get("dealer_gamma", {}) or {}
+        zones = payload.get("zones", {}) or {}
+        data_quality = payload.get("data_quality", {}) or {}
+
+        blockers: list[str] = []
+        confirmations: list[str] = []
+        warnings: list[str] = list(score.get("warnings", []))
+
+        confidence_score = self._to_float(confidence.get("score"), 0.0)
+        structure_score = abs(self._to_float(structure.get("score"), 0.0))
+        trend_probability = self._to_float(confidence.get("trend_probability"), 50.0)
+        mean_reversion_probability = self._to_float(confidence.get("mean_reversion_probability"), 50.0)
+        probability_edge = abs(trend_probability - mean_reversion_probability)
+        exposure_score = abs(self._to_float(dealer.get("exposure_score"), 0.0))
+        dealer_regime = str(dealer.get("dealer_regime") or "unknown")
+
+        if score.get("score", 0) < 85 or score.get("grade") != "A+":
+            blockers.append("Composite setup score is not A+.")
+        if confidence_score < 75:
+            blockers.append("Confidence score is below strict A+ threshold of 75.")
+        else:
+            confirmations.append("Confidence clears strict A+ threshold.")
+        if structure_score < 50:
+            blockers.append("Structure score is below strict A+ threshold of 50.")
+        else:
+            confirmations.append("Directional structure is strong enough for A+ review.")
+        if probability_edge < 25:
+            blockers.append("Trend/mean-reversion probability edge is too narrow.")
+        else:
+            confirmations.append("Probability edge is wide enough to avoid balanced chop.")
+        if "pin risk" in dealer_regime or "balanced" in dealer_regime:
+            blockers.append("Dealer regime does not support clean expansion.")
+        elif "hedge pressure" in dealer_regime or "chase pressure" in dealer_regime:
+            confirmations.append("Dealer regime supports expansion pressure.")
+        if exposure_score < 25:
+            warnings.append("Dealer exposure score is modest; require price confirmation.")
+        else:
+            confirmations.append("Dealer exposure score is meaningful.")
+        if payload.get("high_impact_count", 0):
+            blockers.append("High-impact catalyst risk is active.")
+        if data_quality.get("intraday_error"):
+            blockers.append("Intraday data quality is degraded.")
+
+        required_price_triggers = self._price_triggers(payload, zones)
+        eligible = not blockers
+        return {
+            "eligible": eligible,
+            "label": "A+ ELIGIBLE" if eligible else "NOT A+",
+            "score": score,
+            "blockers": blockers,
+            "confirmations": confirmations,
+            "warnings": warnings[:8],
+            "required_price_triggers": required_price_triggers,
+            "risk_note": "Manual execution watch only. Await trigger confirmation; no automatic trade authorization.",
+        }
+
+    def _price_triggers(self, payload: dict[str, Any], zones: dict[str, Any]) -> list[str]:
+        structure = payload.get("structure", {}) or {}
+        bias = str(structure.get("bias") or "balanced / tactical").lower()
+        triggers: list[str] = []
+        or_high = payload.get("opening_range_high")
+        or_low = payload.get("opening_range_low")
+        vwap = payload.get("vwap")
+        resistance = zones.get("resistance")
+        support = zones.get("support")
+        if "up" in bias or "call" in bias or "trend" in bias:
+            if or_high:
+                triggers.append(f"Hold above opening-range ceiling {or_high}.")
+            if vwap:
+                triggers.append(f"Stay above VWAP {vwap} after trigger.")
+            if resistance:
+                triggers.append(f"Accept above resistance/gamma wall {resistance}.")
+        elif "down" in bias or "put" in bias:
+            if or_low:
+                triggers.append(f"Hold below opening-range floor {or_low}.")
+            if vwap:
+                triggers.append(f"Stay below VWAP {vwap} after trigger.")
+            if support:
+                triggers.append(f"Accept below support/gamma wall {support}.")
+        else:
+            triggers.append("Wait for opening-range break and VWAP confirmation before acting.")
+        return triggers or ["Wait for price confirmation before acting."]
+
     def _historical_regime_edge(self, dealer_regime: str) -> dict[str, Any] | None:
         if self.journal_repo is None or not dealer_regime or dealer_regime == "unknown":
             return None

@@ -9,11 +9,12 @@ from services.options_order_service import OptionsOrderService
 
 
 class LiveExecutionService:
-    def __init__(self, settings_repo, execution_router, trailing_stop_service=None, risk_service=None):
+    def __init__(self, settings_repo, execution_router, trailing_stop_service=None, risk_service=None, execution_guard_service=None):
         self.settings_repo = settings_repo
         self.execution_router = execution_router
         self.trailing_stop_service = trailing_stop_service
         self.risk_service = risk_service
+        self.execution_guard_service = execution_guard_service
         self.ladder_manager = LadderManager()
         self.options_order_service = OptionsOrderService()
 
@@ -75,6 +76,20 @@ class LiveExecutionService:
             if not risk_allowed:
                 return False, risk_reason
         return True, None
+
+    async def _guarded_execute(self, payload: dict[str, Any], namespace: str = "order", cooldown_seconds: int | None = None) -> Any:
+        if self.execution_guard_service is None:
+            return await self.execution_router.execute(payload)
+        key = self.execution_guard_service.build_key(payload, namespace=namespace)
+        with self.execution_guard_service.guarded(key, payload=payload, cooldown_seconds=cooldown_seconds) as (allowed, reason):
+            if not allowed:
+                return {"status": "blocked", "reason": reason, "guard_key": key, "payload": payload}
+            try:
+                result = await self.execution_router.execute(payload)
+                return result
+            except Exception as exc:
+                self.execution_guard_service.mark_failure(key, str(exc), release_cooldown=True)
+                raise
 
     async def submit_stock_ladder(
         self,
@@ -191,6 +206,7 @@ class LiveExecutionService:
             "type": "option",
             "qty": quantity,
             "order_type": order_type,
+            "option_symbol": option_symbol,
         })
         if price is not None:
             payload["limit_price"] = float(price)
@@ -198,7 +214,7 @@ class LiveExecutionService:
             allowed, reason = self.risk_service.can_open_new_position(trade_style="options", strategy="options")
             if not allowed:
                 return {"status": "blocked", "reason": reason, "symbol": symbol, "option_symbol": option_symbol}
-        return await self.execution_router.execute(payload)
+        return await self._guarded_execute(payload, namespace="option_entry")
 
     async def submit_vertical_spread(
         self,
@@ -216,6 +232,8 @@ class LiveExecutionService:
             "type": "option",
             "qty": quantity,
             "order_type": order_type,
+            "strategy": "vertical_spread",
+            "option_symbol": f"{long_symbol}|{short_symbol}",
         })
         if price is not None:
             order["limit_price"] = float(price)
@@ -223,7 +241,7 @@ class LiveExecutionService:
             allowed, reason = self.risk_service.can_open_new_position(trade_style="options", strategy="options")
             if not allowed:
                 return {"status": "blocked", "reason": reason, "symbol": symbol, "legs": [long_symbol, short_symbol]}
-        return await self.execution_router.execute(order)
+        return await self._guarded_execute(order, namespace="option_spread_entry")
 
     async def execute_triggered_trailing_exits(self, limit_buffer_pct: float = 0.0) -> dict[str, Any]:
         if self.trailing_stop_service is None:
@@ -233,7 +251,7 @@ class LiveExecutionService:
         for payload in payloads:
             position_id = payload.pop("position_id", "unknown")
             try:
-                result = await self.execution_router.execute(payload)
+                result = await self._guarded_execute(payload, namespace="trailing_exit", cooldown_seconds=10)
                 results.append({"position_id": position_id, "payload": payload, "result": result})
                 if hasattr(self.trailing_stop_service, "mark_exit_pending"):
                     self.trailing_stop_service.mark_exit_pending(position_id, result=result)

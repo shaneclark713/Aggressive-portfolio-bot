@@ -1,16 +1,43 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+from telegram.error import BadRequest
+
+logger = logging.getLogger("aggressive_portfolio_bot.telegram.callbacks")
+
+
+async def _safe_answer(query) -> None:
+    try:
+        await query.answer()
+    except BadRequest as exc:
+        # Telegram may reject stale callback answers. That should not break the
+        # trade action flow after the server already received the callback.
+        logger.warning("Callback answer failed: %s", exc)
+
+
+async def _safe_edit(query, text: str) -> None:
+    try:
+        await query.edit_message_text(text)
+    except BadRequest as exc:
+        if "Message is not modified" in str(exc):
+            return
+        logger.warning("Callback edit failed; falling back to message reply: %s", exc)
+        try:
+            await query.message.reply_text(text)
+        except Exception:
+            raise exc
 
 
 async def handle_trade_callback(update, context, app_services):
     query = update.callback_query
-    await query.answer()
+    await _safe_answer(query)
 
     raw = query.data or ""
     parts = raw.split("|", 1)
     if len(parts) != 2:
-        await query.edit_message_text("Invalid trade action.")
+        await _safe_edit(query, "Invalid trade action.")
         return
 
     action, trade_id = parts
@@ -39,7 +66,7 @@ async def handle_trade_callback(update, context, app_services):
             if trade_repo is not None and hasattr(trade_repo, "upsert_trade"):
                 trade_repo.upsert_trade({"trade_id": trade_id, "status": "APPROVED"})
             _log("ALERT_APPROVED", trade_id=trade_id, actor_chat_id=str(update.effective_chat.id))
-        await query.edit_message_text(f"Trade {trade_id} approved.")
+        await _safe_edit(query, f"Trade {trade_id} approved.")
         return
 
     if action == "p":
@@ -54,7 +81,7 @@ async def handle_trade_callback(update, context, app_services):
             if trade_repo is not None and hasattr(trade_repo, "upsert_trade"):
                 trade_repo.upsert_trade({"trade_id": trade_id, "status": "PAPER", "notes": "Paper trade"})
             _log("ALERT_PAPER_TRADED", trade_id=trade_id, actor_chat_id=str(update.effective_chat.id))
-        await query.edit_message_text(f"Trade {trade_id} marked as paper trade.")
+        await _safe_edit(query, f"Trade {trade_id} marked as paper trade.")
         return
 
     if action == "r":
@@ -69,7 +96,7 @@ async def handle_trade_callback(update, context, app_services):
             if trade_repo is not None and hasattr(trade_repo, "upsert_trade"):
                 trade_repo.upsert_trade({"trade_id": trade_id, "status": "REJECTED"})
             _log("ALERT_REJECTED", trade_id=trade_id, actor_chat_id=str(update.effective_chat.id))
-        await query.edit_message_text(f"Trade {trade_id} rejected.")
+        await _safe_edit(query, f"Trade {trade_id} rejected.")
         return
 
-    await query.edit_message_text("Unknown trade action.")
+    await _safe_edit(query, "Unknown trade action.")

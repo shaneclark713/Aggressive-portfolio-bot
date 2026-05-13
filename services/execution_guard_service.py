@@ -26,7 +26,10 @@ class ExecutionGuardService:
         self._last_status: dict[str, Any] = {
             "blocked": 0,
             "allowed": 0,
+            "failed": 0,
             "last_block_reason": None,
+            "last_failure_type": None,
+            "last_failure_error": None,
             "last_key": None,
         }
 
@@ -75,10 +78,38 @@ class ExecutionGuardService:
         finally:
             self._active_locks.discard(key)
 
-    def mark_failure(self, key: str, error: str, release_cooldown: bool = False) -> None:
+    def mark_failure(self, key: str, error: str, release_cooldown: bool = False, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        classification = self.classify_failure(error)
         if release_cooldown:
             self._recent_keys.pop(key, None)
-        self._log("execution_guard_failure", {"key": key, "error": error, "release_cooldown": release_cooldown})
+        failure_payload = {
+            "key": key,
+            "error": error,
+            "failure_type": classification["failure_type"],
+            "is_retryable": classification["is_retryable"],
+            "release_cooldown": release_cooldown,
+            "payload": payload or {},
+        }
+        self._last_status.update({
+            "failed": self._last_status["failed"] + 1,
+            "last_failure_type": classification["failure_type"],
+            "last_failure_error": error,
+            "last_key": key,
+        })
+        self._log("execution_guard_failure", failure_payload)
+        return failure_payload
+
+    def classify_failure(self, error: str) -> dict[str, Any]:
+        text = str(error or "").lower()
+        if any(token in text for token in ("insufficient", "buying power", "margin", "cash")):
+            return {"failure_type": "insufficient_funds", "is_retryable": False}
+        if any(token in text for token in ("market closed", "outside market", "session")):
+            return {"failure_type": "market_closed", "is_retryable": False}
+        if any(token in text for token in ("rejected", "invalid", "not found", "symbol", "contract")):
+            return {"failure_type": "broker_rejected", "is_retryable": False}
+        if any(token in text for token in ("timeout", "temporarily", "rate limit", "429", "503", "502", "connection", "network")):
+            return {"failure_type": "transient_api", "is_retryable": True}
+        return {"failure_type": "unknown_execution_failure", "is_retryable": False}
 
     def status(self) -> dict[str, Any]:
         return {

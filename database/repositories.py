@@ -114,6 +114,70 @@ class TradeRepository:
         row = cursor.fetchone()
         return dict(row) if row else None
 
+    def find_open_trade_for_broker_position(self, symbol: str, broker: str | None = None) -> Optional[Dict[str, Any]]:
+        symbol = str(symbol or "").upper()
+        cursor = self.conn.cursor()
+        if broker:
+            cursor.execute(
+                """
+                SELECT * FROM active_trades
+                WHERE symbol = ? AND status = 'OPEN' AND notes LIKE ?
+                ORDER BY trade_id DESC
+                LIMIT 1
+                """,
+                (symbol, f"%broker={broker}%"),
+            )
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+        return self.get_open_trade_by_symbol(symbol)
+
+    def upsert_recovered_trade(self, position: Dict[str, Any]) -> int:
+        symbol = str(position.get("symbol") or "UNKNOWN").upper()
+        broker = str(position.get("broker") or "unknown")
+        existing = self.find_open_trade_for_broker_position(symbol, broker=broker)
+        if existing:
+            return int(existing["trade_id"])
+        notes = (
+            "recovered_from_broker_position "
+            f"broker={broker} "
+            f"position_id={position.get('position_id')} "
+            f"asset_type={position.get('asset_type')} "
+            f"quantity={position.get('quantity')}"
+        )
+        return self.create_trade(
+            {
+                "broker_order_id": position.get("position_id"),
+                "symbol": symbol,
+                "side": position.get("side", "LONG"),
+                "strategy": "broker_recovery",
+                "horizon": "recovered",
+                "status": "OPEN",
+                "entry_time": datetime.utcnow().isoformat(),
+                "entry_price": position.get("entry_price"),
+                "stop_loss": position.get("stop_loss"),
+                "notes": notes,
+            }
+        )
+
+    def mark_missing_open_trades_reconciled(self, live_symbols: set[str], reason: str = "broker_position_missing") -> list[int]:
+        closed: list[int] = []
+        normalized_live_symbols = {str(symbol).upper() for symbol in live_symbols}
+        for trade in self.get_open_trades():
+            symbol = str(trade.get("symbol") or "").upper()
+            if symbol in normalized_live_symbols:
+                continue
+            trade_id = int(trade["trade_id"])
+            self.close_trade(
+                trade_id=trade_id,
+                exit_price=float(trade.get("entry_price") or 0),
+                pnl=0.0,
+                close_reason=reason,
+                exit_time=datetime.utcnow().isoformat(),
+            )
+            closed.append(trade_id)
+        return closed
+
     def close_trade(
         self,
         trade_id: int,

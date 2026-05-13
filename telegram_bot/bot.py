@@ -4,6 +4,7 @@ import logging
 
 from telegram.ext import ApplicationBuilder
 
+from .execution_handlers import build_execution_handlers
 from .handler_registry import dedupe_handlers, summarize_handlers
 from .handlers import build_handlers
 from .runtime_handlers import build_runtime_handlers
@@ -17,6 +18,7 @@ def build_telegram_app(token: str, app_services, config_service, admin_chat_id: 
     handlers = dedupe_handlers([
         build_runtime_handlers(app_services, admin_chat_id),
         build_spy_0dte_handlers(app_services, admin_chat_id),
+        build_execution_handlers(app_services, config_service, admin_chat_id),
         build_handlers(app_services, config_service, admin_chat_id),
     ])
     for handler in handlers:

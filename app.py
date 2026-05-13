@@ -40,6 +40,7 @@ from services.iv_analyzer import IVAnalyzer
 from services.options_flow_analyzer import OptionsFlowAnalyzer
 from services.trailing_stop_service import TrailingStopService
 from services.position_sync_service import PositionSyncService
+from services.startup_recovery_service import StartupRecoveryService
 from services.broker_ladder_service import BrokerLadderService
 try:
     from services.risk_service import RiskService
@@ -201,6 +202,7 @@ async def main() -> None:
             alpaca_client=mode_aware_alpaca,
             tradier_client=mode_aware_tradier,
         )
+        startup_recovery_service = StartupRecoveryService(position_sync_service, trade_repo, execution_log_repo)
         broker_ladder_service = BrokerLadderService(execution_router)
         ticker_research_service = TickerResearchService(
             storage_path=settings.storage_path,
@@ -250,10 +252,19 @@ async def main() -> None:
             "options_chain_ingest_service": options_chain_ingest_service,
             "trailing_stop_service": trailing_stop_service,
             "position_sync_service": position_sync_service,
+            "startup_recovery_service": startup_recovery_service,
             "broker_ladder_service": broker_ladder_service,
             "ticker_research_service": ticker_research_service,
             "risk_service": risk_service,
         }
+
+        recovery_summary = await startup_recovery_service.recover(prune_missing=True)
+        logger.info("Startup recovery status=%s recovered=%s closed_missing=%s errors=%s",
+                    recovery_summary.get("status"),
+                    recovery_summary.get("recovered_trade_ids"),
+                    recovery_summary.get("closed_missing_trade_ids"),
+                    recovery_summary.get("errors"))
+        app_services["startup_recovery_last_summary"] = recovery_summary
 
         telegram_app = build_telegram_app(
             settings.telegram_bot_token,

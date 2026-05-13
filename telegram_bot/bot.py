@@ -13,6 +13,7 @@ from .runtime_handlers import build_runtime_handlers
 from .spy_0dte_handlers import build_spy_0dte_handlers
 from .spy_calibration_handlers import build_spy_calibration_handlers
 from .spy_dashboard_handlers import build_spy_dashboard_handlers
+from .spy_learning_handlers import build_spy_learning_handlers
 from .spy_performance_handlers import build_spy_performance_handlers
 
 logger = logging.getLogger("aggressive_portfolio_bot.telegram.bot")
@@ -27,6 +28,7 @@ def build_telegram_app(token: str, app_services, config_service, admin_chat_id: 
         build_spy_performance_handlers(app_services, admin_chat_id),
         build_spy_calibration_handlers(app_services, admin_chat_id),
         build_spy_dashboard_handlers(app_services, admin_chat_id),
+        build_spy_learning_handlers(app_services, admin_chat_id),
         build_execution_handlers(app_services, config_service, admin_chat_id),
         build_analytics_handlers(app_services, config_service, admin_chat_id),
         build_handlers(app_services, config_service, admin_chat_id),

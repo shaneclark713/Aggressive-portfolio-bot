@@ -12,7 +12,7 @@ from services.dealer_gamma_service import DealerGammaService
 
 
 class Spy0DteService:
-    """Analysis-only SPY/XSP market-structure report service."""
+    """Institutional-style SPY/XSP market-structure report service."""
 
     US_EVENT_COUNTRIES = {"US", "USA", "UNITED STATES"}
     US_EVENT_KEYWORDS = (
@@ -264,27 +264,14 @@ class Spy0DteService:
             score -= 5
             notes.append("High-impact U.S./market events increase headline risk.")
         score = max(0, min(100, score))
-        if score >= 70:
-            grade = "A"
-        elif score >= 55:
-            grade = "B"
-        elif score >= 40:
-            grade = "C"
-        else:
-            grade = "NO-TRADE / WAIT"
+        grade = "A" if score >= 70 else "B" if score >= 55 else "C" if score >= 40 else "NO-TRADE / WAIT"
         trend_probability = max(20, min(80, 50 + int(structure.get("score", 0)) // 2))
         if "pin risk" in dealer_regime:
             trend_probability = max(20, trend_probability - 10)
         elif "hedge pressure" in dealer_regime or "chase pressure" in dealer_regime:
             trend_probability = min(80, trend_probability + 5)
         mean_reversion_probability = 100 - trend_probability
-        return {
-            "score": score,
-            "grade": grade,
-            "trend_probability": trend_probability,
-            "mean_reversion_probability": mean_reversion_probability,
-            "notes": notes[:6],
-        }
+        return {"score": score, "grade": grade, "trend_probability": trend_probability, "mean_reversion_probability": mean_reversion_probability, "notes": notes[:6]}
 
     async def _safe_headlines(self) -> list[dict[str, Any]]:
         try:
@@ -297,12 +284,6 @@ class Spy0DteService:
             return await self.econ_client.fetch_events(date.today())
         except Exception:
             return []
-
-    async def _safe_latest_price(self, symbol: str) -> float:
-        try:
-            return self._safe_float(await self.market_client.get_latest_price(symbol))
-        except Exception:
-            return 0.0
 
     async def _safe_chain_rows(self, symbol: str = "SPY") -> list[dict[str, Any]]:
         if self.tradier_client is None or not hasattr(self.tradier_client, "get_options_chain"):
@@ -373,46 +354,106 @@ class Spy0DteService:
         payload["confidence"] = self._confidence(payload)
         return payload
 
+    def _desk_bias(self, payload: dict[str, Any]) -> str:
+        structure = payload.get("structure", {})
+        confidence = payload.get("confidence", {})
+        dealer = str(payload.get("dealer_gamma", {}).get("dealer_regime", ""))
+        latest = self._safe_float(payload.get("latest"))
+        vwap = self._safe_float(payload.get("vwap"))
+        score = int(structure.get("score", 0) or 0)
+        if confidence.get("grade") == "NO-TRADE / WAIT":
+            return "WAIT / NO CLEAN EDGE"
+        if score >= 25 and latest >= vwap and "pin risk" not in dealer:
+            return "CALLS FAVORED ABOVE VWAP / OR HIGH"
+        if score <= -25 and latest <= vwap:
+            return "PUTS FAVORED BELOW VWAP / OR LOW"
+        return "TACTICAL / RANGE SCALP ONLY"
+
+    def _execution_plan(self, payload: dict[str, Any]) -> list[str]:
+        latest = self._safe_float(payload.get("latest"))
+        vwap = self._safe_float(payload.get("vwap"))
+        or_high = self._safe_float(payload.get("opening_range_high"))
+        or_low = self._safe_float(payload.get("opening_range_low"))
+        structure = payload.get("structure", {})
+        confidence = payload.get("confidence", {})
+        lines = [
+            f"Primary Bias: {self._desk_bias(payload)}",
+            f"Trend Day Probability: {confidence.get('trend_probability', 50)}%",
+            f"Mean-Reversion Probability: {confidence.get('mean_reversion_probability', 50)}%",
+        ]
+        if vwap:
+            lines.append(f"Call confirmation requires price holding above VWAP {self._price(vwap)}.")
+            lines.append(f"Put confirmation requires VWAP rejection or loss below {self._price(vwap)}.")
+        if or_high:
+            lines.append(f"Bullish trigger: acceptance above OR ceiling {self._price(or_high)}.")
+        if or_low:
+            lines.append(f"Bearish trigger: acceptance below OR floor {self._price(or_low)}.")
+        if latest and or_high and latest > or_high:
+            lines.append("Opening range is already reclaimed; avoid late chase unless retest holds.")
+        elif latest and or_low and latest < or_low:
+            lines.append("Opening range floor is broken; avoid calls until reclaim.")
+        elif structure.get("bias") == "balanced / tactical":
+            lines.append("Auction is balanced; wait for sweep/reclaim instead of front-running direction.")
+        return lines
+
+    def _risk_flags(self, payload: dict[str, Any]) -> list[str]:
+        flags: list[str] = []
+        dealer = str(payload.get("dealer_gamma", {}).get("dealer_regime", ""))
+        if "pin risk" in dealer:
+            flags.append("Dealer regime warns of pin/mean-reversion; take profits faster unless expansion confirms.")
+        if int(payload.get("high_impact_count", 0) or 0) > 0:
+            flags.append("Market-relevant high-impact catalysts are active; expect headline whipsaws.")
+        if payload.get("cross_confirmation", {}).get("state") == "unconfirmed":
+            flags.append("SPY structure lacks index confirmation; reduce conviction.")
+        rsi = self._safe_float(payload.get("rsi_5m"), 50.0)
+        if rsi > 72:
+            flags.append("RSI is extended; wait for reset or failed-break signal.")
+        if rsi < 35:
+            flags.append("RSI is washed out; puts need continuation, not late chase.")
+        return flags or ["No major desk risk flag beyond normal 0DTE gamma risk."]
+
     def format_report(self, payload: dict[str, Any], title: str) -> str:
         structure = payload.get("structure", {})
         zones = payload.get("zones", {})
         cross = payload.get("cross_confirmation", {})
         confidence = payload.get("confidence", {})
         dealer = payload.get("dealer_gamma", {})
+        sentiment = payload.get("sentiment", {}) or {}
         lines = [
             f"<b>{escape(title)}</b>",
             f"<i>{escape(str(payload.get('timestamp', '')))}</i>",
             "",
-            "<b>EXECUTIVE READ</b>",
-            f"• Structure: {escape(str(structure.get('bias', 'balanced / tactical')))} | Score: {escape(str(structure.get('score', 0)))}",
-            f"• Confidence: {escape(str(confidence.get('grade', 'n/a')))} | {escape(str(confidence.get('score', 0)))} / 100",
-            f"• Probability: Trend {escape(str(confidence.get('trend_probability', 50)))}% / Mean-Reversion {escape(str(confidence.get('mean_reversion_probability', 50)))}%",
-            f"• Day Type: {escape(str(structure.get('day_type', 'rotation / mean-reversion structure')))}",
-            f"• Volatility State: {escape(str(payload.get('volatility_state', 'unknown')))}",
+            "<b>DESK READ</b>",
+            f"• Bias: {escape(self._desk_bias(payload))}",
+            f"• Grade: {escape(str(confidence.get('grade', 'n/a')))} | Score: {escape(str(confidence.get('score', 0)))} / 100",
+            f"• Structure: {escape(str(structure.get('bias', 'balanced / tactical')))} | {escape(str(structure.get('day_type', 'rotation / mean-reversion structure')))}",
+            f"• Trend vs Mean Reversion: {escape(str(confidence.get('trend_probability', 50)))}% / {escape(str(confidence.get('mean_reversion_probability', 50)))}%",
             f"• Dealer Regime: {escape(str(dealer.get('dealer_regime', 'unknown')))} | Exposure: {escape(str(dealer.get('exposure_score', 0)))}",
-            f"• Cross Confirmation: {escape(str(cross.get('state', 'n/a')))} | SPY Change: {escape(str(cross.get('spy_change_pct', 0.0)))}%",
+            f"• Cross Check: {escape(str(cross.get('state', 'n/a')))} | Confirmations: {escape(str(cross.get('confirmations', 0)))}",
             "",
-            "<b>PRICE STRUCTURE</b>",
-            f"• SPY Last: {self._price(payload.get('latest'))} | XSP: {self._price(payload.get('xsp_latest'))} ({escape(str(payload.get('xsp_symbol_used') or 'n/a'))}) | SPX: {self._price(payload.get('spx_latest'))} ({escape(str(payload.get('spx_symbol_used') or 'n/a'))})",
+            "<b>KEY LEVELS</b>",
+            f"• SPY: {self._price(payload.get('latest'))} | XSP: {self._price(payload.get('xsp_latest'))} ({escape(str(payload.get('xsp_symbol_used') or 'n/a'))}) | SPX: {self._price(payload.get('spx_latest'))} ({escape(str(payload.get('spx_symbol_used') or 'n/a'))})",
             f"• VWAP: {self._price(payload.get('vwap'))}",
             f"• Premarket High/Low: {self._price(payload.get('premarket_high'))} / {self._price(payload.get('premarket_low'))}",
-            f"• OR Ceiling/Floor: {self._price(payload.get('opening_range_high'))} / {self._price(payload.get('opening_range_low'))}",
-            f"• Opening Drive: {escape(str(payload.get('opening_drive', 'n/a')))}",
+            f"• Opening Range Ceiling/Floor: {self._price(payload.get('opening_range_high'))} / {self._price(payload.get('opening_range_low'))}",
+            f"• Gamma Pin/Flip: {escape(str(zones.get('pin', 'n/a')))} / {escape(str(zones.get('flip', 'n/a')))}",
+            f"• Gamma Support/Resistance: {escape(str(zones.get('support', 'n/a')))} / {escape(str(zones.get('resistance', 'n/a')))}",
             "",
-            "<b>RSI / REVERSION</b>",
-            f"• 5m RSI: {escape(str(payload.get('rsi_5m')))} | Daily RSI: {escape(str(payload.get('rsi_daily')))}",
-            "• Watch RSI extremes for bounce/pullback risk before trusting range continuation.",
-            "",
-            "<b>DEALER / GAMMA ESTIMATE</b>",
-            f"• Pin: {escape(str(zones.get('pin', 'n/a')))} | Flip: {escape(str(zones.get('flip', 'n/a')))}",
-            f"• Support: {escape(str(zones.get('support', 'n/a')))} | Resistance: {escape(str(zones.get('resistance', 'n/a')))}",
-            f"• Regime: {escape(str(dealer.get('dealer_regime', 'unknown')))} | Exposure Score: {escape(str(dealer.get('exposure_score', 0)))}",
-            f"• Contracts Sampled: {payload.get('chain_contracts', 0)}",
-            "",
-            "<b>VOLUME PROFILE / LIQUIDITY</b>",
+            "<b>EXECUTION PLAN</b>",
         ]
+        lines.extend(f"• {escape(item)}" for item in self._execution_plan(payload))
+        lines.extend(["", "<b>INVALIDATION / RISK FLAGS</b>"])
+        lines.extend(f"• {escape(item)}" for item in self._risk_flags(payload))
+        lines.extend([
+            "",
+            "<b>ORB / VWAP / RSI</b>",
+            f"• Opening Drive: {escape(str(payload.get('opening_drive', 'n/a')))}",
+            f"• Volatility State: {escape(str(payload.get('volatility_state', 'unknown')))}",
+            f"• 5m RSI: {escape(str(payload.get('rsi_5m')))} | Daily RSI: {escape(str(payload.get('rsi_daily')))}",
+        ])
+        lines.extend(["", "<b>VOLUME PROFILE / LIQUIDITY</b>"])
         lines.extend(f"• {escape(str(item))}" for item in payload.get("volume_nodes", [])[:4])
-        lines.extend(["", "<b>SWEEP / RANGE NOTES</b>"])
+        lines.extend(["", "<b>LIQUIDITY SWEEP NOTES</b>"])
         lines.extend(f"• {escape(str(item))}" for item in payload.get("sweep_notes", [])[:4])
         lines.extend(["", "<b>DEALER / GAMMA NOTES</b>"])
         lines.extend(f"• {escape(str(item))}" for item in dealer.get("notes", [])[:4])
@@ -422,34 +463,25 @@ class Spy0DteService:
         lines.extend(f"• {escape(str(item))}" for item in confidence.get("notes", [])[:6])
         lines.extend([
             "",
-            "<b>CATALYSTS / SENTIMENT</b>",
-            f"• Sentiment: {escape(str(payload.get('sentiment', {}).get('sentiment', 'neutral')))} ({payload.get('sentiment', {}).get('score', 0)})",
+            "<b>MACRO / SENTIMENT</b>",
+            f"• Institutional Tone: {escape(str(sentiment.get('sentiment', 'neutral')))} ({sentiment.get('score', 0)})",
             f"• Headlines: {payload.get('headline_count')} | Market Events: {payload.get('market_event_count', 0)} / Raw Events: {payload.get('raw_event_count', 0)} | High-Impact Market Events: {payload.get('high_impact_count')}",
         ])
         for event in payload.get("events", [])[:4]:
             lines.append(f"• {escape(str(event))}")
-        lines.extend(["", "<b>STRUCTURE NOTES</b>"])
-        for item in structure.get("reasons") or ["No strong structure confirmation yet."]:
-            lines.append(f"• {escape(str(item))}")
         if payload.get("top_headlines"):
-            lines.extend(["", "<b>TOP NEWS</b>"])
+            lines.extend(["", "<b>TOP MARKET HEADLINES</b>"])
             lines.extend(f"• {escape(str(item))}" for item in payload.get("top_headlines", [])[:4])
+        lines.extend(["", "<b>FINAL DESK NOTE</b>"])
+        lines.append("• Trade the confirmation, not the first impulse. In 0DTE, a clean no-trade is better than forcing chop.")
         return "\n".join(lines)
 
     async def run_breakdown(self) -> dict[str, Any]:
         payload = await self.analyze()
-        await self.telegram_app.bot.send_message(
-            chat_id=self.chat_id,
-            text=self.format_report(payload, "🧭 6:15 AM SPY/XSP 0DTE Direction Desk"),
-            parse_mode="HTML",
-        )
+        await self.telegram_app.bot.send_message(chat_id=self.chat_id, text=self.format_report(payload, "🧭 6:15 AM SPY/XSP 0DTE Direction Desk"), parse_mode="HTML")
         return payload
 
     async def run_midday(self) -> dict[str, Any]:
         payload = await self.analyze()
-        await self.telegram_app.bot.send_message(
-            chat_id=self.chat_id,
-            text=self.format_report(payload, "☀️ 10:00 AM ET SPY/XSP 0DTE Midday Desk"),
-            parse_mode="HTML",
-        )
+        await self.telegram_app.bot.send_message(chat_id=self.chat_id, text=self.format_report(payload, "☀️ 10:00 AM ET SPY/XSP 0DTE Midday Desk"), parse_mode="HTML")
         return payload

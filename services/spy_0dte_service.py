@@ -16,6 +16,7 @@ from services.market_narrative_engine import MarketNarrativeEngine
 from services.probability_matrix_engine import ProbabilityMatrixEngine
 from services.session_personality_engine import SessionPersonalityEngine
 from services.tactical_playbook_engine import TacticalPlaybookEngine
+from services.trade_memory_engine import TradeMemoryEngine
 from services.trap_detection_engine import TrapDetectionEngine
 
 
@@ -48,6 +49,7 @@ class Spy0DteService:
         self.autonomous_scaling_engine = AutonomousScalingEngine()
         self.session_personality_engine = SessionPersonalityEngine()
         self.trap_detection_engine = TrapDetectionEngine()
+        self.trade_memory_engine = TradeMemoryEngine()
 
     def _safe_float(self, value: Any, default: float = 0.0) -> float:
         try:
@@ -296,6 +298,13 @@ class Spy0DteService:
             rsi_5m=rsi_5m,
         )
 
+        trade_memory = self.trade_memory_engine.snapshot(
+            playbook=playbook,
+            session_personality=session_personality,
+            trap_detection=trap_detection,
+            probabilities=probabilities,
+        )
+
         return {
             "timestamp": datetime.now(self.market_tz).isoformat(timespec="seconds"),
             "latest": latest,
@@ -319,4 +328,5 @@ class Spy0DteService:
             "autonomous_scaling": autonomous_scaling,
             "session_personality": session_personality,
             "trap_detection": trap_detection,
+            "trade_memory": trade_memory,
         }

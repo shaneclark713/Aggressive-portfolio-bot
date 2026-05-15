@@ -14,6 +14,7 @@ from services.dealer_gamma_service import DealerGammaService
 from services.execution_timing_engine import ExecutionTimingEngine
 from services.market_narrative_engine import MarketNarrativeEngine
 from services.probability_matrix_engine import ProbabilityMatrixEngine
+from services.session_personality_engine import SessionPersonalityEngine
 from services.tactical_playbook_engine import TacticalPlaybookEngine
 
 
@@ -44,6 +45,7 @@ class Spy0DteService:
         self.execution_timing_engine = ExecutionTimingEngine()
         self.adaptive_exit_engine = AdaptiveExitEngine()
         self.autonomous_scaling_engine = AutonomousScalingEngine()
+        self.session_personality_engine = SessionPersonalityEngine()
 
     def _safe_float(self, value: Any, default: float = 0.0) -> float:
         try:
@@ -272,6 +274,16 @@ class Spy0DteService:
             rsi_5m=rsi_5m,
         )
 
+        session_personality = self.session_personality_engine.classify(
+            probabilities=probabilities,
+            structure=structure,
+            dealer_gamma=dealer_gamma,
+            execution_timing=execution_timing,
+            latest=latest,
+            vwap=vwap,
+            rsi_5m=rsi_5m,
+        )
+
         return {
             "timestamp": datetime.now(self.market_tz).isoformat(timespec="seconds"),
             "latest": latest,
@@ -293,4 +305,5 @@ class Spy0DteService:
             "execution_timing": execution_timing,
             "adaptive_exits": adaptive_exits,
             "autonomous_scaling": autonomous_scaling,
+            "session_personality": session_personality,
         }

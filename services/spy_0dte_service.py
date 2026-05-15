@@ -10,6 +10,7 @@ from data.sentiment import analyze_sentiment
 from services.cross_market_intelligence_service import CrossMarketIntelligenceService
 from services.dealer_gamma_service import DealerGammaService
 from services.market_narrative_engine import MarketNarrativeEngine
+from services.probability_matrix_engine import ProbabilityMatrixEngine
 from services.tactical_playbook_engine import TacticalPlaybookEngine
 
 
@@ -36,6 +37,7 @@ class Spy0DteService:
         self.cross_market = CrossMarketIntelligenceService(market_client)
         self.narrative_engine = MarketNarrativeEngine()
         self.playbook_engine = TacticalPlaybookEngine()
+        self.probability_engine = ProbabilityMatrixEngine()
 
     def _safe_float(self, value: Any, default: float = 0.0) -> float:
         try:
@@ -59,6 +61,7 @@ class Spy0DteService:
         closes = closes.dropna()
         if len(closes) < period + 2:
             return 50.0
+
         delta = closes.diff()
         gains = delta.clip(lower=0).rolling(period).mean()
         losses = (-delta.clip(upper=0)).rolling(period).mean()
@@ -156,7 +159,6 @@ class Spy0DteService:
         daily_df = await self.market_client.get_historical_data("SPY", multiplier=1, timespan="day")
 
         premarket, regular, opening_range = self._today_frames(minute_df)
-
         active = regular if not regular.empty else premarket
 
         latest = self._safe_float(active["close"].iloc[-1]) if not active.empty else 0.0
@@ -228,6 +230,17 @@ class Spy0DteService:
             vwap=vwap,
         )
 
+        probabilities = self.probability_engine.build(
+            structure=structure,
+            dealer_gamma=dealer_gamma,
+            cross_market=cross_market,
+            narrative=narrative,
+            playbook=playbook,
+            rsi_5m=rsi_5m,
+            latest=latest,
+            vwap=vwap,
+        )
+
         return {
             "timestamp": datetime.now(self.market_tz).isoformat(timespec="seconds"),
             "latest": latest,
@@ -245,4 +258,5 @@ class Spy0DteService:
             "cross_market": cross_market,
             "narrative": narrative,
             "playbook": playbook,
+            "probabilities": probabilities,
         }

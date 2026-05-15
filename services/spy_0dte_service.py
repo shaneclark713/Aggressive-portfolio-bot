@@ -9,6 +9,7 @@ import pandas as pd
 from data.sentiment import analyze_sentiment
 from services.cross_market_intelligence_service import CrossMarketIntelligenceService
 from services.dealer_gamma_service import DealerGammaService
+from services.execution_timing_engine import ExecutionTimingEngine
 from services.market_narrative_engine import MarketNarrativeEngine
 from services.probability_matrix_engine import ProbabilityMatrixEngine
 from services.tactical_playbook_engine import TacticalPlaybookEngine
@@ -38,6 +39,7 @@ class Spy0DteService:
         self.narrative_engine = MarketNarrativeEngine()
         self.playbook_engine = TacticalPlaybookEngine()
         self.probability_engine = ProbabilityMatrixEngine()
+        self.execution_timing_engine = ExecutionTimingEngine()
 
     def _safe_float(self, value: Any, default: float = 0.0) -> float:
         try:
@@ -241,6 +243,13 @@ class Spy0DteService:
             vwap=vwap,
         )
 
+        execution_timing = self.execution_timing_engine.analyze(
+            structure=structure,
+            probabilities=probabilities,
+            latest=latest,
+            vwap=vwap,
+        )
+
         return {
             "timestamp": datetime.now(self.market_tz).isoformat(timespec="seconds"),
             "latest": latest,
@@ -259,4 +268,5 @@ class Spy0DteService:
             "narrative": narrative,
             "playbook": playbook,
             "probabilities": probabilities,
+            "execution_timing": execution_timing,
         }

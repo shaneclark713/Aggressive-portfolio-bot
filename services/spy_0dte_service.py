@@ -7,6 +7,8 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from data.sentiment import analyze_sentiment
+from services.adaptive_exit_engine import AdaptiveExitEngine
+from services.autonomous_scaling_engine import AutonomousScalingEngine
 from services.cross_market_intelligence_service import CrossMarketIntelligenceService
 from services.dealer_gamma_service import DealerGammaService
 from services.execution_timing_engine import ExecutionTimingEngine
@@ -40,6 +42,8 @@ class Spy0DteService:
         self.playbook_engine = TacticalPlaybookEngine()
         self.probability_engine = ProbabilityMatrixEngine()
         self.execution_timing_engine = ExecutionTimingEngine()
+        self.adaptive_exit_engine = AdaptiveExitEngine()
+        self.autonomous_scaling_engine = AutonomousScalingEngine()
 
     def _safe_float(self, value: Any, default: float = 0.0) -> float:
         try:
@@ -250,6 +254,24 @@ class Spy0DteService:
             vwap=vwap,
         )
 
+        adaptive_exits = self.adaptive_exit_engine.evaluate(
+            probabilities=probabilities,
+            playbook=playbook,
+            structure=structure,
+            execution_timing=execution_timing,
+            rsi_5m=rsi_5m,
+            latest=latest,
+            vwap=vwap,
+        )
+
+        autonomous_scaling = self.autonomous_scaling_engine.plan(
+            probabilities=probabilities,
+            playbook=playbook,
+            adaptive_exits=adaptive_exits,
+            execution_timing=execution_timing,
+            rsi_5m=rsi_5m,
+        )
+
         return {
             "timestamp": datetime.now(self.market_tz).isoformat(timespec="seconds"),
             "latest": latest,
@@ -269,4 +291,6 @@ class Spy0DteService:
             "playbook": playbook,
             "probabilities": probabilities,
             "execution_timing": execution_timing,
+            "adaptive_exits": adaptive_exits,
+            "autonomous_scaling": autonomous_scaling,
         }

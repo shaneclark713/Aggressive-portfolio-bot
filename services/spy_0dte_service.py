@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from html import escape
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -11,10 +10,11 @@ from data.sentiment import analyze_sentiment
 from services.cross_market_intelligence_service import CrossMarketIntelligenceService
 from services.dealer_gamma_service import DealerGammaService
 from services.market_narrative_engine import MarketNarrativeEngine
+from services.tactical_playbook_engine import TacticalPlaybookEngine
 
 
 class Spy0DteService:
-    """Institutional-style SPY/XSP market-structure report service."""
+    """Institutional-style SPY/XSP tactical intelligence service."""
 
     US_EVENT_COUNTRIES = {"US", "USA", "UNITED STATES"}
     US_EVENT_KEYWORDS = (
@@ -31,9 +31,11 @@ class Spy0DteService:
         self.econ_client = econ_client
         self.tradier_client = tradier_client
         self.market_tz = ZoneInfo("America/New_York")
+
         self.dealer_gamma = DealerGammaService()
         self.cross_market = CrossMarketIntelligenceService(market_client)
         self.narrative_engine = MarketNarrativeEngine()
+        self.playbook_engine = TacticalPlaybookEngine()
 
     def _safe_float(self, value: Any, default: float = 0.0) -> float:
         try:
@@ -68,25 +70,51 @@ class Spy0DteService:
     def _vwap(self, df: pd.DataFrame) -> float:
         if df.empty or not {"high", "low", "close", "volume"}.issubset(df.columns):
             return 0.0
+
         volume = df["volume"].fillna(0)
+
         if float(volume.sum()) <= 0:
             return self._safe_float(df["close"].iloc[-1])
+
         typical = (df["high"] + df["low"] + df["close"]) / 3
         return round(float((typical * volume).sum() / volume.sum()), 4)
 
     def _today_frames(self, minute_df: pd.DataFrame):
         if minute_df.empty:
             return minute_df, minute_df, minute_df
+
         ny_index = minute_df.index.tz_convert(self.market_tz)
         today = datetime.now(self.market_tz).date()
         today_df = minute_df.loc[ny_index.date == today]
+
         idx = today_df.index.tz_convert(self.market_tz)
-        regular = today_df.loc[((idx.hour > 9) | ((idx.hour == 9) & (idx.minute >= 30))) & (idx.hour < 16)]
-        premarket = today_df.loc[(idx.hour >= 4) & ((idx.hour < 9) | ((idx.hour == 9) & (idx.minute < 30)))]
+
+        regular = today_df.loc[
+            ((idx.hour > 9) | ((idx.hour == 9) & (idx.minute >= 30)))
+            & (idx.hour < 16)
+        ]
+
+        premarket = today_df.loc[
+            (idx.hour >= 4)
+            & ((idx.hour < 9) | ((idx.hour == 9) & (idx.minute < 30)))
+        ]
+
         opening_range = regular.head(6)
         return premarket, regular, opening_range
 
-    def _structure(self, latest: float, vwap: float, rsi: float, regular: pd.DataFrame, opening_range: pd.DataFrame) -> dict[str, Any]:
+    def _market_relevant_events(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        relevant: list[dict[str, Any]] = []
+
+        for event in events or []:
+            country = str(event.get("country") or "").upper()
+            title = str(event.get("event") or event.get("title") or "").lower()
+
+            if country in self.US_EVENT_COUNTRIES or any(k in title for k in self.US_EVENT_KEYWORDS):
+                relevant.append(event)
+
+        return relevant
+
+    def _structure(self, latest: float, vwap: float, rsi: float, opening_range: pd.DataFrame) -> dict[str, Any]:
         score = 0
         reasons: list[str] = []
 
@@ -107,6 +135,7 @@ class Spy0DteService:
         if not opening_range.empty:
             or_high = self._safe_float(opening_range["high"].max())
             or_low = self._safe_float(opening_range["low"].min())
+
             if latest > or_high:
                 score += 20
                 reasons.append("above opening range")
@@ -115,26 +144,19 @@ class Spy0DteService:
                 reasons.append("below opening range")
 
         bias = "upside structure" if score >= 25 else "downside structure" if score <= -25 else "balanced / tactical"
+
         return {
             "score": score,
             "bias": bias,
             "reasons": reasons[:5],
         }
 
-    def _market_relevant_events(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        relevant: list[dict[str, Any]] = []
-        for event in events or []:
-            country = str(event.get("country") or "").upper()
-            title = str(event.get("event") or event.get("title") or "").lower()
-            if country in self.US_EVENT_COUNTRIES or any(k in title for k in self.US_EVENT_KEYWORDS):
-                relevant.append(event)
-        return relevant
-
     async def analyze(self) -> dict[str, Any]:
         minute_df = await self.market_client.get_historical_data("SPY", multiplier=5, timespan="minute")
         daily_df = await self.market_client.get_historical_data("SPY", multiplier=1, timespan="day")
 
         premarket, regular, opening_range = self._today_frames(minute_df)
+
         active = regular if not regular.empty else premarket
 
         latest = self._safe_float(active["close"].iloc[-1]) if not active.empty else 0.0
@@ -148,17 +170,40 @@ class Spy0DteService:
         events = self._market_relevant_events(raw_events)
 
         chain_rows = []
+
         if self.tradier_client and hasattr(self.tradier_client, "get_options_chain"):
             try:
-                chain_rows = await self.tradier_client.get_options_chain(symbol="SPY", expiration=date.today().isoformat(), greeks=True)
+                chain_rows = await self.tradier_client.get_options_chain(
+                    symbol="SPY",
+                    expiration=date.today().isoformat(),
+                    greeks=True,
+                )
             except Exception:
                 chain_rows = []
 
-        dealer_gamma = self.dealer_gamma.summarize(latest, chain_rows if isinstance(chain_rows, list) else []).as_dict()
-        structure = self._structure(latest, vwap, rsi_5m, regular, opening_range)
+        dealer_gamma = self.dealer_gamma.summarize(
+            latest,
+            chain_rows if isinstance(chain_rows, list) else [],
+        ).as_dict()
 
-        xsp_latest, xsp_symbol = await self._safe_latest_price_any(["XSP", "I:XSP", "CBOE:XSP"])
-        spx_latest, spx_symbol = await self._safe_latest_price_any(["I:SPX", "SPX", "CBOE:SPX"])
+        structure = self._structure(
+            latest,
+            vwap,
+            rsi_5m,
+            opening_range,
+        )
+
+        xsp_latest, xsp_symbol = await self._safe_latest_price_any([
+            "XSP",
+            "I:XSP",
+            "CBOE:XSP",
+        ])
+
+        spx_latest, spx_symbol = await self._safe_latest_price_any([
+            "I:SPX",
+            "SPX",
+            "CBOE:SPX",
+        ])
 
         cross_market = await self.cross_market.analyze()
         sentiment = analyze_sentiment(headlines)
@@ -168,6 +213,16 @@ class Spy0DteService:
             dealer_gamma=dealer_gamma,
             cross_market=cross_market,
             sentiment=sentiment,
+            rsi_5m=rsi_5m,
+            latest=latest,
+            vwap=vwap,
+        )
+
+        playbook = self.playbook_engine.select(
+            structure=structure,
+            dealer_gamma=dealer_gamma,
+            cross_market=cross_market,
+            narrative=narrative,
             rsi_5m=rsi_5m,
             latest=latest,
             vwap=vwap,
@@ -189,4 +244,5 @@ class Spy0DteService:
             "structure": structure,
             "cross_market": cross_market,
             "narrative": narrative,
+            "playbook": playbook,
         }

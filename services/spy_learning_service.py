@@ -40,6 +40,28 @@ class SpyLearningService:
             key=lambda row: (row.get("priority", 0), row.get("sample_size", 0)),
             reverse=True,
         )[:12]
+
+        phase9_mutation = {
+            "reinforcement_bias": "balanced",
+            "adaptation_shift": "stable",
+            "confidence_drift": "neutral",
+            "autonomy_recommendation": "maintain",
+        }
+
+        high_conf_losses = calibration.get("high_confidence_losses", []) or []
+        if len(high_conf_losses) >= 5:
+            phase9_mutation.update({
+                "reinforcement_bias":"defensive",
+                "adaptation_shift":"decrease",
+                "confidence_drift":"overconfident",
+                "autonomy_recommendation":"tighten",
+            })
+        if accuracy.get("win_rate",0)>=60:
+            phase9_mutation.update({
+                "reinforcement_bias":"aggressive",
+                "adaptation_shift":"increase",
+                "autonomy_recommendation":"expand",
+            })
         return {
             "available": True,
             "lookback_limit": int(limit),
@@ -49,6 +71,7 @@ class SpyLearningService:
             "warnings": warnings,
             "performance": performance,
             "calibration": calibration,
+            "phase9_mutation": phase9_mutation,
         }
 
     def _performance_recommendations(self, performance: dict[str, Any]) -> list[dict[str, Any]]:

@@ -195,6 +195,11 @@ class Spy0DteService:
         rsi_5m = self._rsi(active["close"]) if not active.empty else 50.0
         vwap = self._vwap(regular if not regular.empty else active)
 
+        premarket_high = self._safe_float(premarket["high"].max()) if not premarket.empty else 0.0
+        premarket_low = self._safe_float(premarket["low"].min()) if not premarket.empty else 0.0
+        opening_range_high = self._safe_float(opening_range["high"].max()) if not opening_range.empty else 0.0
+        opening_range_low = self._safe_float(opening_range["low"].min()) if not opening_range.empty else 0.0
+
         headlines = await self.news_client.fetch_market_news() if self.news_client else []
         raw_events = await self.econ_client.fetch_events(date.today()) if self.econ_client else []
         events = self._market_relevant_events(raw_events)
@@ -215,6 +220,12 @@ class Spy0DteService:
             latest,
             chain_rows if isinstance(chain_rows, list) else [],
         ).as_dict()
+        zones = {
+            "pin": dealer_gamma.get("pin"),
+            "flip": dealer_gamma.get("flip"),
+            "support": dealer_gamma.get("support"),
+            "resistance": dealer_gamma.get("resistance"),
+        }
 
         structure = self._structure(latest, vwap, rsi_5m, opening_range)
 
@@ -380,6 +391,12 @@ class Spy0DteService:
             "sentiment": sentiment,
             "events": events,
             "dealer_gamma": dealer_gamma,
+            "zones": zones,
+            "premarket_high": premarket_high,
+            "premarket_low": premarket_low,
+            "opening_range_high": opening_range_high,
+            "opening_range_low": opening_range_low,
+            "chain_contracts": len(chain_rows if isinstance(chain_rows, list) else []),
             "structure": structure,
             "cross_market": cross_market,
             "narrative": narrative,

@@ -18,12 +18,6 @@ from services.session_personality_engine import SessionPersonalityEngine
 from services.tactical_playbook_engine import TacticalPlaybookEngine
 from services.trade_memory_engine import TradeMemoryEngine
 from services.trap_detection_engine import TrapDetectionEngine
-from services.theta_decay_protection_engine import ThetaDecayProtectionEngine
-from services.institutional_flow_expansion_engine import InstitutionalFlowExpansionEngine
-from services.ai_trade_review_engine import AITradeReviewEngine
-from services.autonomous_mutation_engine import AutonomousMutationEngine
-from services.institutional_ai_ecosystem_engine import InstitutionalAIEcosystemEngine
-from services.spy_report_formatter import build_spy_report
 
 
 class Spy0DteService:
@@ -56,16 +50,6 @@ class Spy0DteService:
         self.session_personality_engine = SessionPersonalityEngine()
         self.trap_detection_engine = TrapDetectionEngine()
         self.trade_memory_engine = TradeMemoryEngine()
-
-        self.theta_decay_engine = ThetaDecayProtectionEngine()
-        self.institutional_flow_engine = InstitutionalFlowExpansionEngine()
-        self.ai_trade_review_engine = AITradeReviewEngine()
-        self.autonomous_mutation_engine = AutonomousMutationEngine()
-        self.ecosystem_engine = InstitutionalAIEcosystemEngine()
-
-    def format_report(self, payload: dict[str, Any], title: str = "SPY/XSP 0DTE Direction Desk") -> str:
-        """Compatibility formatter used by Telegram commands and scheduled SPY reports."""
-        return build_spy_report(payload, title)
 
     def _safe_float(self, value: Any, default: float = 0.0) -> float:
         try:
@@ -203,54 +187,123 @@ class Spy0DteService:
 
         if self.tradier_client and hasattr(self.tradier_client, "get_options_chain"):
             try:
-                chain_rows = await self.tradier_client.get_options_chain(symbol="SPY", expiration=date.today().isoformat(), greeks=True)
+                chain_rows = await self.tradier_client.get_options_chain(
+                    symbol="SPY",
+                    expiration=date.today().isoformat(),
+                    greeks=True,
+                )
             except Exception:
                 chain_rows = []
 
-        dealer_gamma = self.dealer_gamma.summarize(latest, chain_rows if isinstance(chain_rows, list) else []).as_dict()
+        dealer_gamma = self.dealer_gamma.summarize(
+            latest,
+            chain_rows if isinstance(chain_rows, list) else [],
+        ).as_dict()
 
-        structure = self._structure(latest, vwap, rsi_5m, opening_range)
+        structure = self._structure(
+            latest,
+            vwap,
+            rsi_5m,
+            opening_range,
+        )
 
-        xsp_latest, xsp_symbol = await self._safe_latest_price_any(["XSP", "I:XSP", "CBOE:XSP"])
-        spx_latest, spx_symbol = await self._safe_latest_price_any(["I:SPX", "SPX", "CBOE:SPX"])
+        xsp_latest, xsp_symbol = await self._safe_latest_price_any([
+            "XSP",
+            "I:XSP",
+            "CBOE:XSP",
+        ])
+
+        spx_latest, spx_symbol = await self._safe_latest_price_any([
+            "I:SPX",
+            "SPX",
+            "CBOE:SPX",
+        ])
 
         cross_market = await self.cross_market.analyze()
         sentiment = analyze_sentiment(headlines)
 
-        narrative = self.narrative_engine.build(structure=structure,dealer_gamma=dealer_gamma,cross_market=cross_market,sentiment=sentiment,rsi_5m=rsi_5m,latest=latest,vwap=vwap)
+        narrative = self.narrative_engine.build(
+            structure=structure,
+            dealer_gamma=dealer_gamma,
+            cross_market=cross_market,
+            sentiment=sentiment,
+            rsi_5m=rsi_5m,
+            latest=latest,
+            vwap=vwap,
+        )
 
-        playbook = self.playbook_engine.select(structure=structure,dealer_gamma=dealer_gamma,cross_market=cross_market,narrative=narrative,rsi_5m=rsi_5m,latest=latest,vwap=vwap)
+        playbook = self.playbook_engine.select(
+            structure=structure,
+            dealer_gamma=dealer_gamma,
+            cross_market=cross_market,
+            narrative=narrative,
+            rsi_5m=rsi_5m,
+            latest=latest,
+            vwap=vwap,
+        )
 
-        probabilities = self.probability_engine.build(structure=structure,dealer_gamma=dealer_gamma,cross_market=cross_market,narrative=narrative,playbook=playbook,rsi_5m=rsi_5m,latest=latest,vwap=vwap)
+        probabilities = self.probability_engine.build(
+            structure=structure,
+            dealer_gamma=dealer_gamma,
+            cross_market=cross_market,
+            narrative=narrative,
+            playbook=playbook,
+            rsi_5m=rsi_5m,
+            latest=latest,
+            vwap=vwap,
+        )
 
-        execution_timing = self.execution_timing_engine.analyze(structure=structure,probabilities=probabilities,latest=latest,vwap=vwap)
+        execution_timing = self.execution_timing_engine.analyze(
+            structure=structure,
+            probabilities=probabilities,
+            latest=latest,
+            vwap=vwap,
+        )
 
-        adaptive_exits = self.adaptive_exit_engine.evaluate(probabilities=probabilities,playbook=playbook,structure=structure,execution_timing=execution_timing,rsi_5m=rsi_5m,latest=latest,vwap=vwap)
+        adaptive_exits = self.adaptive_exit_engine.evaluate(
+            probabilities=probabilities,
+            playbook=playbook,
+            structure=structure,
+            execution_timing=execution_timing,
+            rsi_5m=rsi_5m,
+            latest=latest,
+            vwap=vwap,
+        )
 
-        autonomous_scaling = self.autonomous_scaling_engine.plan(probabilities=probabilities,playbook=playbook,adaptive_exits=adaptive_exits,execution_timing=execution_timing,rsi_5m=rsi_5m)
+        autonomous_scaling = self.autonomous_scaling_engine.plan(
+            probabilities=probabilities,
+            playbook=playbook,
+            adaptive_exits=adaptive_exits,
+            execution_timing=execution_timing,
+            rsi_5m=rsi_5m,
+        )
 
-        session_personality = self.session_personality_engine.classify(probabilities=probabilities,structure=structure,dealer_gamma=dealer_gamma,execution_timing=execution_timing,latest=latest,vwap=vwap,rsi_5m=rsi_5m)
+        session_personality = self.session_personality_engine.classify(
+            probabilities=probabilities,
+            structure=structure,
+            dealer_gamma=dealer_gamma,
+            execution_timing=execution_timing,
+            latest=latest,
+            vwap=vwap,
+            rsi_5m=rsi_5m,
+        )
 
-        trap_detection = self.trap_detection_engine.detect(probabilities=probabilities,structure=structure,session_personality=session_personality,execution_timing=execution_timing,latest=latest,vwap=vwap,rsi_5m=rsi_5m)
+        trap_detection = self.trap_detection_engine.detect(
+            probabilities=probabilities,
+            structure=structure,
+            session_personality=session_personality,
+            execution_timing=execution_timing,
+            latest=latest,
+            vwap=vwap,
+            rsi_5m=rsi_5m,
+        )
 
-        trade_memory = self.trade_memory_engine.snapshot(playbook=playbook,session_personality=session_personality,trap_detection=trap_detection,probabilities=probabilities)
-
-        theta_protection = self.theta_decay_engine.evaluate(probabilities=probabilities,execution_timing=execution_timing,adaptive_exits=adaptive_exits,autonomous_scaling=autonomous_scaling,session_personality=session_personality,trap_detection=trap_detection,rsi_5m=rsi_5m,latest=latest,vwap=vwap)
-
-        institutional_flow = self.institutional_flow_engine.evaluate(dealer_gamma=dealer_gamma,cross_market=cross_market,probabilities=probabilities,narrative=narrative,execution_timing=execution_timing,session_personality=session_personality,trap_detection=trap_detection,latest=latest,vwap=vwap,rsi_5m=rsi_5m)
-
-        ai_review = self.ai_trade_review_engine.review(playbook=playbook,probabilities=probabilities,execution_timing=execution_timing,adaptive_exits=adaptive_exits,theta_protection=theta_protection,institutional_flow=institutional_flow,trap_detection=trap_detection,trade_memory=trade_memory)
-
-        autonomous_mutation = self.autonomous_mutation_engine.mutate(ai_review=ai_review,probabilities=probabilities,execution_timing=execution_timing,theta_protection=theta_protection,institutional_flow=institutional_flow,trap_detection=trap_detection)
-
-        ecosystem = self.ecosystem_engine.build({
-            "trade_memory": trade_memory,
-            "ai_review": ai_review,
-            "institutional_flow": institutional_flow,
-            "theta_protection": theta_protection,
-            "autonomous_mutation": autonomous_mutation,
-            "session_personality": session_personality,
-        })
+        trade_memory = self.trade_memory_engine.snapshot(
+            playbook=playbook,
+            session_personality=session_personality,
+            trap_detection=trap_detection,
+            probabilities=probabilities,
+        )
 
         return {
             "timestamp": datetime.now(self.market_tz).isoformat(timespec="seconds"),
@@ -270,15 +323,11 @@ class Spy0DteService:
             "narrative": narrative,
             "playbook": playbook,
             "probabilities": probabilities,
+            "confidence": confidence,
             "execution_timing": execution_timing,
             "adaptive_exits": adaptive_exits,
             "autonomous_scaling": autonomous_scaling,
             "session_personality": session_personality,
             "trap_detection": trap_detection,
             "trade_memory": trade_memory,
-            "theta_protection": theta_protection,
-            "institutional_flow": institutional_flow,
-            "ai_review": ai_review,
-            "autonomous_mutation": autonomous_mutation,
-            "ecosystem": ecosystem,
         }

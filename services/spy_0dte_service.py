@@ -8,16 +8,21 @@ import pandas as pd
 
 from data.sentiment import analyze_sentiment
 from services.adaptive_exit_engine import AdaptiveExitEngine
+from services.ai_trade_review_engine import AITradeReviewEngine
+from services.autonomous_mutation_engine import AutonomousMutationEngine
 from services.autonomous_scaling_engine import AutonomousScalingEngine
 from services.confidence_mapper import build_confidence
 from services.cross_market_intelligence_service import CrossMarketIntelligenceService
 from services.dealer_gamma_service import DealerGammaService
 from services.execution_timing_engine import ExecutionTimingEngine
+from services.institutional_ai_ecosystem_engine import InstitutionalAIEcosystemEngine
+from services.institutional_flow_expansion_engine import InstitutionalFlowExpansionEngine
 from services.market_narrative_engine import MarketNarrativeEngine
 from services.probability_matrix_engine import ProbabilityMatrixEngine
 from services.session_personality_engine import SessionPersonalityEngine
 from services.spy_report_formatter import build_spy_report
 from services.tactical_playbook_engine import TacticalPlaybookEngine
+from services.theta_decay_protection_engine import ThetaDecayProtectionEngine
 from services.trade_memory_engine import TradeMemoryEngine
 from services.trap_detection_engine import TrapDetectionEngine
 
@@ -52,6 +57,11 @@ class Spy0DteService:
         self.session_personality_engine = SessionPersonalityEngine()
         self.trap_detection_engine = TrapDetectionEngine()
         self.trade_memory_engine = TradeMemoryEngine()
+        self.theta_decay_engine = ThetaDecayProtectionEngine()
+        self.institutional_flow_engine = InstitutionalFlowExpansionEngine()
+        self.ai_trade_review_engine = AITradeReviewEngine()
+        self.autonomous_mutation_engine = AutonomousMutationEngine()
+        self.ecosystem_engine = InstitutionalAIEcosystemEngine()
 
     def format_report(self, payload: dict[str, Any], title: str = "SPY/XSP 0DTE Direction Desk") -> str:
         """Compatibility formatter used by Telegram commands and scheduled SPY reports."""
@@ -206,24 +216,10 @@ class Spy0DteService:
             chain_rows if isinstance(chain_rows, list) else [],
         ).as_dict()
 
-        structure = self._structure(
-            latest,
-            vwap,
-            rsi_5m,
-            opening_range,
-        )
+        structure = self._structure(latest, vwap, rsi_5m, opening_range)
 
-        xsp_latest, xsp_symbol = await self._safe_latest_price_any([
-            "XSP",
-            "I:XSP",
-            "CBOE:XSP",
-        ])
-
-        spx_latest, spx_symbol = await self._safe_latest_price_any([
-            "I:SPX",
-            "SPX",
-            "CBOE:SPX",
-        ])
+        xsp_latest, xsp_symbol = await self._safe_latest_price_any(["XSP", "I:XSP", "CBOE:XSP"])
+        spx_latest, spx_symbol = await self._safe_latest_price_any(["I:SPX", "SPX", "CBOE:SPX"])
 
         cross_market = await self.cross_market.analyze()
         sentiment = analyze_sentiment(headlines)
@@ -312,6 +308,65 @@ class Spy0DteService:
             probabilities=probabilities,
         )
 
+        theta_protection = self.theta_decay_engine.evaluate(
+            probabilities=probabilities,
+            execution_timing=execution_timing,
+            adaptive_exits=adaptive_exits,
+            autonomous_scaling=autonomous_scaling,
+            session_personality=session_personality,
+            trap_detection=trap_detection,
+            rsi_5m=rsi_5m,
+            latest=latest,
+            vwap=vwap,
+        )
+
+        institutional_flow = self.institutional_flow_engine.evaluate(
+            dealer_gamma=dealer_gamma,
+            cross_market=cross_market,
+            probabilities=probabilities,
+            narrative=narrative,
+            execution_timing=execution_timing,
+            session_personality=session_personality,
+            trap_detection=trap_detection,
+            latest=latest,
+            vwap=vwap,
+            rsi_5m=rsi_5m,
+        )
+
+        ai_review = self.ai_trade_review_engine.review(
+            playbook=playbook,
+            probabilities=probabilities,
+            execution_timing=execution_timing,
+            adaptive_exits=adaptive_exits,
+            theta_protection=theta_protection,
+            institutional_flow=institutional_flow,
+            trap_detection=trap_detection,
+            trade_memory=trade_memory,
+        )
+
+        autonomous_mutation = self.autonomous_mutation_engine.mutate(
+            ai_review=ai_review,
+            probabilities=probabilities,
+            execution_timing=execution_timing,
+            theta_protection=theta_protection,
+            institutional_flow=institutional_flow,
+            trap_detection=trap_detection,
+        )
+
+        ecosystem = self.ecosystem_engine.build({
+            "trade_memory": trade_memory,
+            "ai_review": ai_review,
+            "institutional_flow": institutional_flow,
+            "theta_protection": theta_protection,
+            "autonomous_mutation": autonomous_mutation,
+            "session_personality": session_personality,
+            "probabilities": probabilities,
+            "cross_market": cross_market,
+            "trap_detection": trap_detection,
+            "dealer_gamma": dealer_gamma,
+            "events": events,
+        })
+
         return {
             "timestamp": datetime.now(self.market_tz).isoformat(timespec="seconds"),
             "latest": latest,
@@ -337,4 +392,14 @@ class Spy0DteService:
             "session_personality": session_personality,
             "trap_detection": trap_detection,
             "trade_memory": trade_memory,
+            "theta_protection": theta_protection,
+            "institutional_flow": institutional_flow,
+            "ai_review": ai_review,
+            "autonomous_mutation": autonomous_mutation,
+            "ecosystem": ecosystem,
+            "risk_regime": ecosystem.get("risk_regime", {}),
+            "runtime_health": ecosystem.get("runtime_health", {}),
+            "feedback": ecosystem.get("execution_feedback", {}),
+            "deployment_mode": ecosystem.get("deployment_mode", "advisory_only"),
+            "state_persistence": ecosystem.get("state_persistence", {}),
         }

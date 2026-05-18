@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
+from services.institutional_ai_ecosystem_engine import InstitutionalAIEcosystemEngine
+
 
 class SpyAutonomyService:
     """Controlled live-only autonomy gate for SPY/XSP 0DTE workflows.
 
-    This service never bypasses risk checks, execution guards, or execution mode.
-    It only attempts execution when mode is exactly `live`, the setup passes A+ gates,
-    and a concrete option contract is provided by the upstream scanner/selector.
+    Phase 10 adds institutional ecosystem intelligence without bypassing
+    execution controls, risk checks, or execution-mode requirements.
     """
 
     def __init__(
@@ -24,6 +25,7 @@ class SpyAutonomyService:
         self.spy_setup_score_service = spy_setup_score_service
         self.live_execution_service = live_execution_service
         self.execution_log_repo = execution_log_repo
+        self.ecosystem_engine = InstitutionalAIEcosystemEngine()
 
     async def evaluate(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         mode = self._execution_mode()
@@ -40,6 +42,9 @@ class SpyAutonomyService:
                 return self._blocked("SPY 0DTE service is not configured", mode=mode)
             scan_payload = await self.spy_0dte_service.analyze()
 
+        ecosystem = self.ecosystem_engine.build(scan_payload)
+        scan_payload["ecosystem"] = ecosystem
+
         gate = self.spy_setup_score_service.a_plus_filter(scan_payload)
         if not gate.get("eligible"):
             decision = {
@@ -47,8 +52,20 @@ class SpyAutonomyService:
                 "mode": mode,
                 "reason": "setup did not pass strict A+ gate",
                 "gate": gate,
+                "ecosystem": ecosystem,
             }
             self._log("SPY_AUTONOMY_BLOCKED", decision)
+            return decision
+
+        if ecosystem.get("ecosystem_score",0) < 70:
+            decision = {
+                "status": "blocked",
+                "mode": mode,
+                "reason": "institutional ecosystem score below deployment threshold",
+                "gate": gate,
+                "ecosystem": ecosystem,
+            }
+            self._log("SPY_ECOSYSTEM_BLOCKED", decision)
             return decision
 
         contract = self._contract_from_payload(scan_payload)
@@ -58,6 +75,7 @@ class SpyAutonomyService:
                 "mode": mode,
                 "reason": "no concrete option contract selected",
                 "gate": gate,
+                "ecosystem": ecosystem,
                 "required_payload_keys": ["option_symbol", "recommended_option_symbol", "selected_contract.option_symbol"],
             }
             self._log("SPY_AUTONOMY_BLOCKED", decision)
@@ -78,6 +96,7 @@ class SpyAutonomyService:
             "order_type": order_type,
             "price": price,
             "gate": gate,
+            "ecosystem": ecosystem,
         }
         self._log("SPY_AUTONOMY_READY", decision)
         return decision

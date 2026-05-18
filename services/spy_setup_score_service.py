@@ -17,6 +17,11 @@ class SpySetupScoreService:
         confidence = payload.get("confidence", {}) or {}
         dealer = payload.get("dealer_gamma", {}) or {}
         data_quality = payload.get("data_quality", {}) or {}
+        theta = payload.get("theta_protection", {}) or {}
+        flow = payload.get("institutional_flow", {}) or {}
+        review = payload.get("ai_review", {}) or {}
+        mutation = payload.get("autonomous_mutation", {}) or {}
+        memory = payload.get("trade_memory", {}) or {}
 
         score = 0
         reasons: list[str] = []
@@ -79,6 +84,21 @@ class SpySetupScoreService:
                     warnings.append(str(note))
                 else:
                     reasons.append(str(note))
+
+
+        review_score = float(review.get("review_score", 50))
+        flow_quality = float(flow.get("expansion_quality_score", 50))
+        theta_risk = float(theta.get("theta_risk_score", 50))
+
+        score += min(10, int((review_score - 50) * 0.20))
+        score += min(10, int((flow_quality - 50) * 0.20))
+
+        if theta_risk >= 70:
+            score -= 10
+            warnings.append("Theta protection layer blocks aggressive execution.")
+
+        if memory.get("reinforcement_bias") == "defensive":
+            score -= 5
 
         calibration = self._confidence_calibration(confidence_score)
         if calibration:

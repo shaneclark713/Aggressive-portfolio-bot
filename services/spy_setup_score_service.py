@@ -27,7 +27,13 @@ class SpySetupScoreService:
         reasons: list[str] = []
         warnings: list[str] = []
 
-        confidence_score = self._to_float(confidence.get("score"), 0.0)
+        confidence_score = self._to_float(
+            confidence.get("confidence_score", confidence.get("score")),
+            0.0,
+        )
+        confidence_grade = str(
+            confidence.get("confidence_grade", confidence.get("grade", "n/a"))
+        )
         structure_score = abs(int(self._to_float(structure.get("score"), 0.0)))
         trend_probability = self._to_float(confidence.get("trend_probability"), 50.0)
         mean_reversion_probability = self._to_float(confidence.get("mean_reversion_probability"), 50.0)
@@ -85,7 +91,6 @@ class SpySetupScoreService:
                 else:
                     reasons.append(str(note))
 
-
         review_score = float(review.get("review_score", 50))
         flow_quality = float(flow.get("expansion_quality_score", 50))
         theta_risk = float(theta.get("theta_risk_score", 50))
@@ -121,6 +126,7 @@ class SpySetupScoreService:
             "warnings": warnings[:6],
             "dealer_regime": dealer_regime,
             "confidence_score": confidence_score,
+            "confidence_grade": confidence_grade,
             "structure_score": structure_score,
             "trend_probability": trend_probability,
             "mean_reversion_probability": mean_reversion_probability,
@@ -144,7 +150,10 @@ class SpySetupScoreService:
         confirmations: list[str] = []
         warnings: list[str] = list(score.get("warnings", []))
 
-        confidence_score = self._to_float(confidence.get("score"), 0.0)
+        confidence_score = self._to_float(
+            confidence.get("confidence_score", confidence.get("score")),
+            0.0,
+        )
         structure_score = abs(self._to_float(structure.get("score"), 0.0))
         trend_probability = self._to_float(confidence.get("trend_probability"), 50.0)
         mean_reversion_probability = self._to_float(confidence.get("mean_reversion_probability"), 50.0)

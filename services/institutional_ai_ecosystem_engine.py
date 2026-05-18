@@ -6,16 +6,18 @@ from services.ai_consensus_engine import AIConsensusEngine
 from services.risk_regime_engine import RiskRegimeEngine
 from services.execution_feedback_engine import ExecutionFeedbackEngine
 from services.runtime_health_engine import RuntimeHealthEngine
+from services.ecosystem_state_engine import EcosystemStateEngine
 
 
 class InstitutionalAIEcosystemEngine:
-    """Institutional AI ecosystem coordinator with consensus, risk, feedback and runtime health."""
+    """Institutional AI ecosystem coordinator with persistent rolling state."""
 
     def __init__(self):
         self.consensus_engine = AIConsensusEngine()
         self.risk_regime_engine = RiskRegimeEngine()
         self.execution_feedback_engine = ExecutionFeedbackEngine()
         self.runtime_health_engine = RuntimeHealthEngine()
+        self.state_engine = EcosystemStateEngine()
 
     def build(self, payload: dict[str, Any]) -> dict[str, Any]:
         consensus = self.consensus_engine.evaluate(payload)
@@ -47,7 +49,7 @@ class InstitutionalAIEcosystemEngine:
         ecosystem_score = max(0, min(100, ecosystem_score))
         deployment_mode = "autonomous_candidate" if ecosystem_score >= 75 and risk_regime.get("allow_autonomy") and runtime_health.get("allow_autonomy") else "advisory_only"
 
-        return {
+        result = {
             "ecosystem_score": ecosystem_score,
             "ecosystem_label": "INSTITUTIONAL_ACTIVE" if ecosystem_score >= 70 else "BUILDING",
             "consensus": consensus,
@@ -58,11 +60,12 @@ class InstitutionalAIEcosystemEngine:
             "environment_state": personality.get("environment_state"),
             "reinforcement_bias": memory.get("reinforcement_bias"),
             "adaptation_state": mutation.get("aggressiveness_shift", "stable"),
-            "allow_aggressive": bool(
-                consensus.get("allow_aggressive")
-                and risk_regime.get("allow_aggressive")
-                and runtime_health.get("runtime_mode") == "normal"
-                and ecosystem_score >= 70
-            ),
+            "allow_aggressive": bool(consensus.get("allow_aggressive") and risk_regime.get("allow_aggressive") and runtime_health.get("runtime_mode") == "normal" and ecosystem_score >= 70),
             "deployment_mode": deployment_mode,
         }
+
+        result["state_persistence"] = self.state_engine.persist(result)
+        return result
+
+    def recover_state(self) -> dict[str, Any]:
+        return self.state_engine.recover()

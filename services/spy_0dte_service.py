@@ -9,12 +9,14 @@ import pandas as pd
 from data.sentiment import analyze_sentiment
 from services.adaptive_exit_engine import AdaptiveExitEngine
 from services.autonomous_scaling_engine import AutonomousScalingEngine
+from services.confidence_mapper import build_confidence
 from services.cross_market_intelligence_service import CrossMarketIntelligenceService
 from services.dealer_gamma_service import DealerGammaService
 from services.execution_timing_engine import ExecutionTimingEngine
 from services.market_narrative_engine import MarketNarrativeEngine
 from services.probability_matrix_engine import ProbabilityMatrixEngine
 from services.session_personality_engine import SessionPersonalityEngine
+from services.spy_report_formatter import build_spy_report
 from services.tactical_playbook_engine import TacticalPlaybookEngine
 from services.trade_memory_engine import TradeMemoryEngine
 from services.trap_detection_engine import TrapDetectionEngine
@@ -50,6 +52,10 @@ class Spy0DteService:
         self.session_personality_engine = SessionPersonalityEngine()
         self.trap_detection_engine = TrapDetectionEngine()
         self.trade_memory_engine = TradeMemoryEngine()
+
+    def format_report(self, payload: dict[str, Any], title: str = "SPY/XSP 0DTE Direction Desk") -> str:
+        """Compatibility formatter used by Telegram commands and scheduled SPY reports."""
+        return build_spy_report(payload, title)
 
     def _safe_float(self, value: Any, default: float = 0.0) -> float:
         try:
@@ -252,6 +258,7 @@ class Spy0DteService:
             latest=latest,
             vwap=vwap,
         )
+        confidence = build_confidence(probabilities)
 
         execution_timing = self.execution_timing_engine.analyze(
             structure=structure,

@@ -23,6 +23,7 @@ from services.institutional_flow_expansion_engine import InstitutionalFlowExpans
 from services.ai_trade_review_engine import AITradeReviewEngine
 from services.autonomous_mutation_engine import AutonomousMutationEngine
 from services.institutional_ai_ecosystem_engine import InstitutionalAIEcosystemEngine
+from services.spy_report_formatter import build_spy_report
 
 
 class Spy0DteService:
@@ -61,6 +62,10 @@ class Spy0DteService:
         self.ai_trade_review_engine = AITradeReviewEngine()
         self.autonomous_mutation_engine = AutonomousMutationEngine()
         self.ecosystem_engine = InstitutionalAIEcosystemEngine()
+
+    def format_report(self, payload: dict[str, Any], title: str = "SPY/XSP 0DTE Direction Desk") -> str:
+        """Compatibility formatter used by Telegram commands and scheduled SPY reports."""
+        return build_spy_report(payload, title)
 
     def _safe_float(self, value: Any, default: float = 0.0) -> float:
         try:

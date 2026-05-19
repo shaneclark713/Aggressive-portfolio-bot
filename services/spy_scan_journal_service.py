@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from database.ecosystem_state_repository import record_ecosystem_state
 
 logger = logging.getLogger("aggressive_portfolio_bot.services.spy_scan_journal")
 
@@ -23,6 +24,10 @@ class SpyScanJournalService:
             self.journal_repo.record_scan(scan_type, payload)
         except Exception as exc:
             logger.warning("Failed to journal SPY/XSP scan type=%s: %s", scan_type, exc)
+        try:
+            record_ecosystem_state(self.journal_repo.conn,payload,source=f"spy_0dte:{scan_type}")
+        except Exception as exc:
+            logger.warning("Failed ecosystem persistence type=%s: %s", scan_type, exc)
 
     async def analyze(self, scan_type: str = "manual") -> dict[str, Any]:
         payload = await self.delegate.analyze()
@@ -32,19 +37,9 @@ class SpyScanJournalService:
     async def run_breakdown(self) -> dict[str, Any]:
         payload = await self.delegate.analyze()
         self._record("breakdown", payload)
-        await self.delegate.telegram_app.bot.send_message(
-            chat_id=self.delegate.chat_id,
-            text=self.delegate.format_report(payload, "🧭 6:15 AM SPY/XSP 0DTE Direction Desk"),
-            parse_mode="HTML",
-        )
         return payload
 
     async def run_midday(self) -> dict[str, Any]:
         payload = await self.delegate.analyze()
         self._record("midday", payload)
-        await self.delegate.telegram_app.bot.send_message(
-            chat_id=self.delegate.chat_id,
-            text=self.delegate.format_report(payload, "☀️ 10:00 AM ET SPY/XSP 0DTE Midday Desk"),
-            parse_mode="HTML",
-        )
         return payload

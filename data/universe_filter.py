@@ -192,16 +192,25 @@ class UniverseFilter:
         rel = float(latest["volume"] / avg_volume) if avg_volume else 0.0
         return {"symbol": symbol, "price": float(latest["close"]), "avg_daily_volume": avg_volume, "avg_dollar_volume": avg_dollar, "relative_volume": rel, "atr_pct": atr_pct, "gap_pct": gap_pct}
 
-    def _passes_lightweight_filters(self, metrics: Dict[str, Any], descriptive: Dict[str, Any], technical: Dict[str, Any], swing: bool = False) -> bool:
+    def _lightweight_rejection_reasons(self, metrics: Dict[str, Any], descriptive: Dict[str, Any], technical: Dict[str, Any]) -> List[str]:
+        reasons: List[str] = []
         max_gap_pct = float(technical.get("premarket_gap_max_pct", 12.0)) / 100.0
-        return (
-            metrics["price"] >= float(descriptive.get("price_min", 0))
-            and metrics["avg_daily_volume"] >= float(descriptive.get("avg_daily_volume_min", 0))
-            and metrics["avg_dollar_volume"] >= float(descriptive.get("avg_dollar_volume_min", 0))
-            and metrics["relative_volume"] >= float(technical.get("volume_vs_average_min_ratio", 1.0))
-            and metrics["atr_pct"] >= float(technical.get("atr_min_pct", 0))
-            and metrics["gap_pct"] <= max_gap_pct
-        )
+        if metrics["price"] < float(descriptive.get("price_min", 0)):
+            reasons.append("price_min")
+        if metrics["avg_daily_volume"] < float(descriptive.get("avg_daily_volume_min", 0)):
+            reasons.append("avg_daily_volume_min")
+        if metrics["avg_dollar_volume"] < float(descriptive.get("avg_dollar_volume_min", 0)):
+            reasons.append("avg_dollar_volume_min")
+        if metrics["relative_volume"] < float(technical.get("volume_vs_average_min_ratio", 1.0)):
+            reasons.append("relative_volume")
+        if metrics["atr_pct"] < float(technical.get("atr_min_pct", 0)):
+            reasons.append("atr_min_pct")
+        if metrics["gap_pct"] > max_gap_pct:
+            reasons.append("gap_max_pct")
+        return reasons
+
+    def _passes_lightweight_filters(self, metrics: Dict[str, Any], descriptive: Dict[str, Any], technical: Dict[str, Any], swing: bool = False) -> bool:
+        return not self._lightweight_rejection_reasons(metrics, descriptive, technical)
 
     def _calculate_atr(self, df: pd.DataFrame, period: int = 14) -> pd.Series:
         high_low = df["high"] - df["low"]

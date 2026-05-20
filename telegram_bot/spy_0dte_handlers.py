@@ -49,6 +49,15 @@ def _estimate_underlying_from_chain(rows: list[dict]) -> float:
         return float(median(strikes))
     return 0.0
 
+def _fmt_price(value) -> str:
+    try:
+        if value is None:
+            return "n/a"
+        return f"{float(value):.2f}"
+    except Exception:
+        return "n/a"
+
+
 
 def _format_scan_history(summary: dict) -> str:
     rows = summary.get("rows", []) or []
@@ -302,7 +311,7 @@ def build_spy_0dte_handlers(app_services: dict, admin_chat_id: int):
                 "<b>SPY Tradier-Only Chain Gamma</b>",
                 "",
                 "<i>Polygon intraday bars are not used for this command.</i>",
-                f"• Estimated Underlying Area: {service._price(latest)}",
+                f"• Estimated Underlying Area: {_fmt_price(latest)}",
                 f"• Dealer Regime: {dealer.get('dealer_regime', 'unknown')}",
                 f"• Exposure Score: {dealer.get('exposure_score', 0)}",
                 f"• Pin: {dealer.get('pin', 'n/a')}",
@@ -354,10 +363,10 @@ def build_spy_0dte_handlers(app_services: dict, admin_chat_id: int):
             text = "\n".join([
                 "<b>SPY/XSP Key Levels</b>",
                 "",
-                f"• SPY Last: {service._price(payload.get('latest'))}",
-                f"• VWAP: {service._price(payload.get('vwap'))}",
-                f"• Premarket High/Low: {service._price(payload.get('premarket_high'))} / {service._price(payload.get('premarket_low'))}",
-                f"• OR Ceiling/Floor: {service._price(payload.get('opening_range_high'))} / {service._price(payload.get('opening_range_low'))}",
+                f"• SPY Last: {_fmt_price(payload.get('latest'))}",
+                f"• VWAP: {_fmt_price(payload.get('vwap'))}",
+                f"• Premarket High/Low: {_fmt_price(payload.get('premarket_high'))} / {_fmt_price(payload.get('premarket_low'))}",
+                f"• OR Ceiling/Floor: {_fmt_price(payload.get('opening_range_high'))} / {_fmt_price(payload.get('opening_range_low'))}",
                 f"• Pin/Flip: {zones.get('pin', 'n/a')} / {zones.get('flip', 'n/a')}",
                 f"• Support/Resistance: {zones.get('support', 'n/a')} / {zones.get('resistance', 'n/a')}",
                 "",
